@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { AuthManager } from "./auth.js";
 import { XClient } from "./client.js";
+import { saveClientId } from "./config.js";
 import { mediaStatus, uploadMedia } from "./media.js";
 import { createPost, createThread, deletePost, getMe, searchRecent } from "./posts.js";
 import {
@@ -50,13 +51,34 @@ const run =
     }
   };
 
+type Group = "account" | "read" | "write" | "dm-read" | "dm-write";
+
 export function createServer(client: XClient, auth: AuthManager): McpServer {
   const server = new McpServer({ name: "x-api-mcp", version: VERSION });
+  const cfg = client.cfg;
+
+  /**
+   * Register a tool unless config turns its group off: X_TOOLS picks read and/or write tools,
+   * DM tools need X_ENABLE_DM, and X_REQUIRE_ACCOUNT makes write tools refuse an omitted account.
+   */
+  const register = (group: Group, name: string, config: any, cb: (a: any) => any) => {
+    const kind = group.replace("dm-", "") as "account" | "read" | "write";
+    if (group.startsWith("dm-") && !cfg.dmEnabled) return;
+    if (kind !== "account" && !cfg.toolGroups.has(kind)) return;
+    let handler = cb;
+    if (kind === "write" && cfg.requireAccount) {
+      handler = (a: any) =>
+        a?.account
+          ? cb(a)
+          : fail(new Error(`"account" is required for ${name} (X_REQUIRE_ACCOUNT is on). Call list_accounts and pass the username to act as.`));
+      config = { ...config, inputSchema: { ...config.inputSchema, account: z.string().describe("X username of the authorized account to act as (required)") } };
+    }
+    server.registerTool(name, config, handler);
+  };
 
   // ---- accounts -------------------------------------------------------------------------
 
-  server.registerTool(
-    "list_accounts",
+  register("account", "list_accounts",
     {
       description: "List X accounts authorized on this machine and which one is the default. Local only, no API cost.",
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -79,13 +101,37 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     }),
   );
 
-  server.registerTool(
-    "add_account",
+  register(
+    "account",
+    "set_client_id",
+    {
+      description:
+        "Save the OAuth 2.0 Client ID of the user's own X App (from console.x.com) on this machine, for hosts that " +
+        "cannot pass the X_CLIENT_ID environment variable. Needed once before add_account. No API call.",
+      inputSchema: {
+        client_id: z.string().min(1),
+        client_secret: z.string().optional().describe("Only for Web App (confidential) clients; Native Apps have none"),
+      },
+      annotations: { openWorldHint: false, idempotentHint: true },
+    },
+    run(async ({ client_id, client_secret }: { client_id: string; client_secret?: string }) => {
+      saveClientId(cfg, client_id, client_secret);
+      return {
+        saved: true,
+        active: cfg.clientId === client_id.trim(),
+        ...(cfg.clientIdSource === "env" ? { note: "X_CLIENT_ID is set in the environment and takes precedence over the saved value." } : {}),
+        next: "Call add_account to authorize an X account.",
+      };
+    }),
+  );
+
+  register("account", "add_account",
     {
       description:
         "Start OAuth 2.0 (PKCE) to authorize another X account. Returns authorize_url for the user to open in a browser " +
-        "logged in to that account. A local listener catches the callback and saves the token automatically; then call " +
-        "auth_status with the returned state. Tokens are stored only on this machine.",
+        "logged in to that account, and a note to relay to them. mode=loopback: a local listener saves the token " +
+        "automatically; confirm with auth_status. mode=paste: ask the user to paste the callback URL from the address " +
+        "bar right after approving and pass it to complete_authorization at once. Tokens are stored only on this machine.",
       inputSchema: {
         wait_seconds: z
           .number()
@@ -107,8 +153,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     }),
   );
 
-  server.registerTool(
-    "auth_status",
+  register("account", "auth_status",
     {
       description: "Check whether an authorization started with add_account has finished. Optionally wait for it.",
       inputSchema: {
@@ -120,8 +165,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run(async ({ state, wait_seconds }) => (wait_seconds ? auth.wait(state, wait_seconds * 1000) : auth.status(state))),
   );
 
-  server.registerTool(
-    "complete_authorization",
+  register("account", "complete_authorization",
     {
       description:
         "Fallback when the automatic callback listener is unavailable: finish add_account with the full callback URL " +
@@ -132,8 +176,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run(({ redirect_url }) => auth.complete({ redirect_url })),
   );
 
-  server.registerTool(
-    "set_default_account",
+  register("account", "set_default_account",
     {
       description: "Choose which authorized account is used when a tool call omits `account`.",
       inputSchema: { account: z.string() },
@@ -150,8 +193,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     }),
   );
 
-  server.registerTool(
-    "remove_account",
+  register("account", "remove_account",
     {
       description: "Forget an authorized account on this machine and revoke its tokens at X.",
       inputSchema: {
@@ -163,8 +205,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run(({ account, revoke }) => auth.remove(account, revoke ?? true)),
   );
 
-  server.registerTool(
-    "get_me",
+  register("read", "get_me",
     {
       description: "Fetch the authenticated user's profile via GET /2/users/me (billed as a user read).",
       inputSchema: { account },
@@ -175,8 +216,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
 
   // ---- posting --------------------------------------------------------------------------
 
-  server.registerTool(
-    "create_post",
+  register("write", "create_post",
     {
       description:
         "Publish a post as the given account; also used to reply (reply_to_post_id). Attach media via media_files " +
@@ -204,8 +244,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run((a) => createPost(client, a)),
   );
 
-  server.registerTool(
-    "create_thread",
+  register("write", "create_thread",
     {
       description:
         "Publish a thread: each post replies to the previous one. Stops at the first failure and reports what was posted. " +
@@ -230,8 +269,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     },
   );
 
-  server.registerTool(
-    "delete_post",
+  register("write", "delete_post",
     {
       description: "Delete a post owned by the given account (billed per request).",
       inputSchema: { account, post_id: z.string() },
@@ -240,8 +278,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run(({ account, post_id }) => deletePost(client, account, post_id)),
   );
 
-  server.registerTool(
-    "post_action",
+  register("write", "post_action",
     {
       description:
         "Interact with a post as the given account: like, unlike, repost, unrepost, bookmark, unbookmark, " +
@@ -258,8 +295,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
 
   // ---- media ----------------------------------------------------------------------------
 
-  server.registerTool(
-    "upload_media",
+  register("write", "upload_media",
     {
       description:
         "Upload an image, GIF or video and return its media_id for create_post. Images <= 5 MB go in one request; " +
@@ -280,8 +316,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run((a) => uploadMedia(client, a)),
   );
 
-  server.registerTool(
-    "get_media_status",
+  register("write", "get_media_status",
     {
       description: "Check processing status of an uploaded video/GIF.",
       inputSchema: { account, media_id: z.string() },
@@ -298,8 +333,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
   };
   const user = z.string().describe('A user: "@username", "username", or a numeric user ID');
 
-  server.registerTool(
-    "search",
+  register("read", "search",
     {
       description:
         "Search X. type=posts: posts from the last 7 days (billed per post returned, keep max_results small). " +
@@ -319,8 +353,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run(({ type, ...a }) => (type === "users" ? searchUsers(client, a) : searchRecent(client, a))),
   );
 
-  server.registerTool(
-    "get_posts",
+  register("read", "get_posts",
     {
       description: "Look up posts by ID (1-100), with author, metrics, media and referenced posts. Billed per post.",
       inputSchema: { account, ids: z.array(z.string()).min(1).max(100) },
@@ -329,8 +362,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run((a) => getPosts(client, a)),
   );
 
-  server.registerTool(
-    "get_timeline",
+  register("read", "get_timeline",
     {
       description:
         "Read a timeline. type: home (your reverse-chronological home feed), posts (a user's posts), mentions, " +
@@ -349,8 +381,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run((a) => getTimeline(client, a)),
   );
 
-  server.registerTool(
-    "get_post_engagement",
+  register("read", "get_post_engagement",
     {
       description: "Who engaged with a post. type: liking_users, reposted_by (users), or quotes (quote posts).",
       inputSchema: { account, post_id: z.string(), type: z.enum(["liking_users", "reposted_by", "quotes"]), ...paging },
@@ -361,8 +392,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
 
   // ---- users ----------------------------------------------------------------------------
 
-  server.registerTool(
-    "get_users",
+  register("read", "get_users",
     {
       description: "Look up user profiles by usernames or by numeric IDs (up to 100). Billed per user.",
       inputSchema: {
@@ -375,8 +405,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run((a) => getUsers(client, a)),
   );
 
-  server.registerTool(
-    "get_user_relations",
+  register("read", "get_user_relations",
     {
       description:
         "List followers or following of a user (default: the account itself), or the account's own muting/blocking list.",
@@ -386,8 +415,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run((a) => getUserRelations(client, a)),
   );
 
-  server.registerTool(
-    "user_action",
+  register("write", "user_action",
     {
       description:
         "Follow, unfollow, mute, unmute, block or unblock a user as the given account. " +
@@ -400,8 +428,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
 
   // ---- direct messages ------------------------------------------------------------------
 
-  server.registerTool(
-    "send_dm",
+  register("dm-write", "send_dm",
     {
       description:
         "Send a direct message to a user (`to`) or into an existing conversation (`conversation_id`). " +
@@ -419,8 +446,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run((a) => sendDm(client, a)),
   );
 
-  server.registerTool(
-    "get_dm_events",
+  register("dm-read", "get_dm_events",
     {
       description: "Read recent direct messages: all conversations, one user (`with`), or one conversation_id.",
       inputSchema: { account, with: user.optional(), conversation_id: z.string().optional(), ...paging },
@@ -431,8 +457,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
 
   // ---- lists & trends -------------------------------------------------------------------
 
-  server.registerTool(
-    "list_action",
+  register("write", "list_action",
     {
       description: "Manage X Lists: create, update, delete, add_member, remove_member.",
       inputSchema: {
@@ -449,8 +474,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run((a) => listAction(client, a)),
   );
 
-  server.registerTool(
-    "get_lists",
+  register("read", "get_lists",
     {
       description: "Read Lists. type: owned (lists a user owns, default the account), info, members, or posts of list_id.",
       inputSchema: { account, type: z.enum(["owned", "info", "members", "posts"]), list_id: z.string().optional(), user: user.optional(), ...paging },
@@ -459,8 +483,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run((a) => getLists(client, a)),
   );
 
-  server.registerTool(
-    "get_trends",
+  register("read", "get_trends",
     {
       description: "Personalized trends for the account.",
       inputSchema: { account },

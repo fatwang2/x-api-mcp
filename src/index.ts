@@ -2,7 +2,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { AuthManager } from "./auth.js";
 import { XClient } from "./client.js";
-import { loadConfig } from "./config.js";
+import { appFilePath, loadConfig, saveClientId } from "./config.js";
 import { createPost } from "./posts.js";
 import { createServer } from "./server.js";
 import { TokenStore } from "./store.js";
@@ -16,15 +16,17 @@ const HELP = `x-api-mcp ${VERSION} - local stdio MCP server for the X API
 
 Usage:
   x-api-mcp                      Run the MCP server on stdio (what MCP clients launch)
+  x-api-mcp config --client-id <id> [--client-secret <s>]
+                                 Save your X App's Client ID locally
   x-api-mcp login                Authorize an X account in your browser
   x-api-mcp accounts             List authorized accounts
   x-api-mcp default <username>   Set the default account
   x-api-mcp logout <username>    Remove an account and revoke its tokens
   x-api-mcp post [--account a] <text>   Publish a post (quick test)
 
-Env: X_CLIENT_ID (required), X_CLIENT_SECRET (confidential apps only),
-     X_REDIRECT_URI (default http://127.0.0.1:8765/callback),
-     X_API_MCP_HOME (default ~/.x-api-mcp)`;
+Env: X_CLIENT_ID, X_CLIENT_SECRET (confidential apps only), X_AUTH_MODE (auto|loopback|paste),
+     X_TOOLS (all|write|read), X_REQUIRE_ACCOUNT, X_ENABLE_DM, X_SCOPES,
+     X_REDIRECT_URI (default http://127.0.0.1:8765/callback), X_API_MCP_HOME (default ~/.x-api-mcp)`;
 
 async function main(argv: string[]) {
   const [cmd, ...rest] = argv;
@@ -50,6 +52,13 @@ async function main(argv: string[]) {
       auth.close();
       if (s.status === "done") print(s.result);
       else throw new Error(s.status === "error" ? s.error : "Timed out waiting for authorization.");
+      return;
+    }
+    case "config": {
+      const opts: Record<string, string> = {};
+      for (let i = 0; i < rest.length; i += 2) opts[rest[i].replace(/^--/, "")] = rest[i + 1];
+      saveClientId(cfg, need(opts["client-id"], "--client-id"), opts["client-secret"]);
+      console.log(`Saved Client ID to ${appFilePath(cfg.homeDir)}`);
       return;
     }
     case "accounts": {

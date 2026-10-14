@@ -1,0 +1,12 @@
+{
+  "name": "x-api-mcp",
+  "owner": { "name": "fatwang2", "url": "https://github.com/fatwang2" },
+  "description": "Local MCP server for the official X API",
+  "plugins": [
+    {
+      "name": "x-api-mcp",
+      "source": "./",
+      "description": "Post, reply, thread, upload media and manage multiple X accounts through the official X API."
+    }
+  ]
+}

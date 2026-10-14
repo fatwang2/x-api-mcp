@@ -1,0 +1,53 @@
+{
+  "name": "x-api-mcp",
+  "displayName": "X API",
+  "version": "0.2.0",
+  "description": "Post, reply, thread, upload media and manage multiple X (Twitter) accounts through the official X API. Runs locally; tokens stay on your machine.",
+  "author": { "name": "fatwang2", "url": "https://github.com/fatwang2" },
+  "homepage": "https://github.com/fatwang2/x-api-mcp",
+  "repository": "https://github.com/fatwang2/x-api-mcp",
+  "documentationUrl": "https://github.com/fatwang2/x-api-mcp#readme",
+  "supportUrl": "https://github.com/fatwang2/x-api-mcp/issues",
+  "privacyPolicyUrl": "https://github.com/fatwang2/x-api-mcp#privacy-policy",
+  "license": "MIT",
+  "keywords": ["x", "twitter", "social", "posting", "mcp"],
+  "userConfig": {
+    "client_id": {
+      "type": "string",
+      "title": "X Client ID",
+      "description": "OAuth 2.0 Client ID of your own X App (console.x.com). You can also leave this empty and set it later with the set_client_id tool."
+    },
+    "client_secret": {
+      "type": "string",
+      "title": "X Client Secret",
+      "description": "Only for Web App (confidential) clients. Leave empty for a Native App.",
+      "sensitive": true
+    },
+    "tools": {
+      "type": "string",
+      "title": "Tools to enable",
+      "description": "all: read and write tools. write: only posting and other write tools (reads cost money).",
+      "options": ["all", "write"],
+      "default": "all"
+    },
+    "auth_mode": {
+      "type": "string",
+      "title": "Authorization mode",
+      "description": "auto detects; loopback saves the callback automatically when the browser is on this computer; paste asks you to paste the callback URL.",
+      "options": ["auto", "loopback", "paste"],
+      "default": "auto"
+    },
+    "require_account": {
+      "type": "boolean",
+      "title": "Require an explicit account for writes",
+      "description": "Refuse write calls that do not name the account, to avoid posting from the wrong account.",
+      "default": true
+    },
+    "enable_dm": {
+      "type": "boolean",
+      "title": "Enable direct messages",
+      "description": "Request DM scopes and add DM tools. Turn on only if your X App has Direct Messages permission.",
+      "default": false
+    }
+  }
+}

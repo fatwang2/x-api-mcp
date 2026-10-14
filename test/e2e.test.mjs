@@ -274,8 +274,11 @@ test("interactions, relationships, timelines, DMs, lists and scope checks", asyn
   client.store.write(d);
 });
 
-test("stdio MCP server lists tools and posts through tools/call", async () => {
-  const child = spawn(process.execPath, [path.resolve("dist/index.js")], { env: process.env, stdio: ["pipe", "pipe", "inherit"] });
+async function withServer(extraEnv, fn) {
+  const child = spawn(process.execPath, [path.resolve("dist/index.js")], {
+    env: { ...process.env, ...extraEnv },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
   let buf = "";
   const pending = new Map();
   child.stdout.on("data", (d) => {
@@ -294,25 +297,86 @@ test("stdio MCP server lists tools and posts through tools/call", async () => {
       pending.set(n, r);
       child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: n, method, params }) + "\n");
     });
-  const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
-  assert.equal(init.result.serverInfo.name, "x-api-mcp");
-  child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
-  const list = await rpc("tools/list", {});
-  const names = list.result.tools.map((t) => t.name).sort();
-  assert.deepEqual(names, [
-    "add_account", "auth_status", "complete_authorization", "create_post", "create_thread", "delete_post",
-    "get_dm_events", "get_lists", "get_me", "get_media_status", "get_post_engagement", "get_posts", "get_timeline",
-    "get_trends", "get_user_relations", "get_users", "list_accounts", "list_action",
-    "post_action", "remove_account", "search", "send_dm", "set_default_account", "upload_media", "user_action",
-  ]);
-  const post = await rpc("tools/call", { name: "create_post", arguments: { account: "bob", text: "via mcp" } });
-  assert.equal(post.result.isError, undefined);
-  assert.equal(JSON.parse(post.result.content[0].text).account, "bob");
-  const bad = await rpc("tools/call", { name: "create_post", arguments: { account: "nobody", text: "x" } });
-  assert.equal(bad.result.isError, true);
-  const search = await rpc("tools/call", { name: "search", arguments: { query: "hi" } });
-  assert.equal(JSON.parse(search.result.content[0].text).posts[0].url, "https://x.com/alice/status/1");
-  const rm = await rpc("tools/call", { name: "remove_account", arguments: { account: "alice" } });
-  assert.deepEqual(JSON.parse(rm.result.content[0].text), { removed: "alice", revoked: true });
-  child.kill();
+  const call = async (name, args) => (await rpc("tools/call", { name, arguments: args })).result;
+  try {
+    const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+    assert.equal(init.result.serverInfo.name, "x-api-mcp");
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+    const tools = (await rpc("tools/list", {})).result.tools.map((t) => t.name).sort();
+    await fn({ tools, call });
+  } finally {
+    child.kill();
+  }
+}
+
+const ACCOUNT_TOOLS = ["add_account", "auth_status", "complete_authorization", "list_accounts", "remove_account", "set_client_id", "set_default_account"];
+const WRITE_TOOLS = ["create_post", "create_thread", "delete_post", "get_media_status", "list_action", "post_action", "upload_media", "user_action"];
+const READ_TOOLS = ["get_lists", "get_me", "get_post_engagement", "get_posts", "get_timeline", "get_trends", "get_user_relations", "get_users", "search"];
+
+test("tool groups: default has no DM tools, X_ENABLE_DM adds them, X_TOOLS=write drops reads", async () => {
+  await withServer({}, async ({ tools }) => {
+    assert.deepEqual(tools, [...ACCOUNT_TOOLS, ...WRITE_TOOLS, ...READ_TOOLS].sort());
+  });
+  await withServer({ X_ENABLE_DM: "1" }, async ({ tools }) => {
+    assert.deepEqual(tools, [...ACCOUNT_TOOLS, ...WRITE_TOOLS, ...READ_TOOLS, "get_dm_events", "send_dm"].sort());
+  });
+  await withServer({ X_TOOLS: "write", X_ENABLE_DM: "true" }, async ({ tools }) => {
+    assert.deepEqual(tools, [...ACCOUNT_TOOLS, ...WRITE_TOOLS, "send_dm"].sort());
+  });
+});
+
+test("X_REQUIRE_ACCOUNT refuses write calls without an explicit account", async () => {
+  await withServer({ X_REQUIRE_ACCOUNT: "1" }, async ({ call }) => {
+    const r = await call("create_post", { text: "no account" });
+    assert.equal(r.isError, true);
+    assert.match(r.content[0].text, /account/);
+    const ok = await call("create_post", { account: "bob", text: "explicit" });
+    assert.equal(ok.isError, undefined);
+    // Reads still fall back to the default account.
+    const read = await call("search", { query: "hi" });
+    assert.equal(read.isError, undefined);
+  });
+});
+
+test("paste auth mode skips the listener and set_client_id configures the app at runtime", async () => {
+  const { loadConfig } = await import("../dist/config.js");
+  assert.equal(loadConfig({ X_AUTH_MODE: "paste" }).authMode, "paste");
+  assert.equal(loadConfig({ SSH_CONNECTION: "1.2.3.4 5 6.7.8.9 22" }).authMode, "paste");
+  assert.equal(loadConfig({}).authMode, "loopback");
+  assert.ok(!loadConfig({}).scopes.includes("dm.write"));
+  assert.ok(loadConfig({ X_ENABLE_DM: "1" }).scopes.includes("dm.write"));
+  assert.equal(loadConfig({ X_CLIENT_ID: "${user_config.client_id}" }).clientId, undefined);
+
+  const noId = { X_CLIENT_ID: "", X_AUTH_MODE: "paste" };
+  await withServer(noId, async ({ call }) => {
+    const before = await call("add_account", {});
+    assert.equal(before.isError, true);
+    assert.match(before.content[0].text, /set_client_id/);
+    const saved = await call("set_client_id", { client_id: "runtime-client" });
+    assert.equal(JSON.parse(saved.content[0].text).active, true);
+    const r = JSON.parse((await call("add_account", {})).content[0].text);
+    assert.equal(r.mode, "paste");
+    assert.equal(r.listening, false);
+    assert.equal(new URL(r.authorize_url).searchParams.get("client_id"), "runtime-client");
+    assert.match(r.note, /paste/);
+    // The pasted callback URL completes the authorization.
+    const done = await call("complete_authorization", { redirect_url: `http://127.0.0.1:18765/callback?state=${r.state}&code=code-dave` });
+    assert.equal(JSON.parse(done.content[0].text).username, "dave");
+  });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, "app.json"), "utf8")).client_id, "runtime-client");
+  assert.equal(fs.statSync(path.join(home, "app.json")).mode & 0o777, 0o600);
+});
+
+test("stdio MCP server posts, searches and removes accounts through tools/call", async () => {
+  await withServer({}, async ({ call }) => {
+    const post = await call("create_post", { account: "bob", text: "via mcp" });
+    assert.equal(post.isError, undefined);
+    assert.equal(JSON.parse(post.content[0].text).account, "bob");
+    const bad = await call("create_post", { account: "nobody", text: "x" });
+    assert.equal(bad.isError, true);
+    const search = await call("search", { query: "hi" });
+    assert.equal(JSON.parse(search.content[0].text).posts[0].url, "https://x.com/alice/status/1");
+    const rm = await call("remove_account", { account: "alice" });
+    assert.deepEqual(JSON.parse(rm.content[0].text), { removed: "alice", revoked: true });
+  });
 });

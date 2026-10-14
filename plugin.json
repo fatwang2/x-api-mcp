@@ -1,0 +1,17 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "x-api-mcp",
+  "version": "0.2.0",
+  "description": "Post, reply, thread, upload media and manage multiple X (Twitter) accounts through the official X API. Runs locally; tokens stay on your machine.",
+  "author": { "name": "fatwang2" },
+  "variables": {
+    "X_CLIENT_ID": { "description": "OAuth 2.0 Client ID of your own X App (console.x.com)", "required": false, "secret": false },
+    "X_CLIENT_SECRET": { "description": "Only for Web App (confidential) clients", "required": false, "secret": true },
+    "X_TOOLS": { "description": "all (default) or write (posting and other write tools only)", "required": false, "secret": false },
+    "X_AUTH_MODE": { "description": "auto (default), loopback, or paste (browser on another device)", "required": false, "secret": false },
+    "X_REQUIRE_ACCOUNT": { "description": "1 to refuse write calls that do not name the account", "required": false, "secret": false },
+    "X_ENABLE_DM": { "description": "1 to request DM scopes and add DM tools (App needs Direct Messages permission)", "required": false, "secret": false }
+  },
+  "mcp": "./mcp.json",
+  "skills": "./skills"
+}

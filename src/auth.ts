@@ -42,7 +42,7 @@ export class AuthManager {
     return this.client.store;
   }
 
-  async start(): Promise<{ authorize_url: string; state: string; listening: boolean; note: string }> {
+  async start(): Promise<{ authorize_url: string; state: string; mode: "loopback" | "paste"; listening: boolean; note: string }> {
     const clientId = requireClientId(this.cfg);
     const { verifier, challenge } = createPkce();
     const state = randomState();
@@ -53,11 +53,24 @@ export class AuthManager {
     this.store.writePending(pending);
     this.sessions.set(state, { status: "pending" });
 
-    const listening = await this.ensureListener();
+    const listening = this.cfg.authMode === "loopback" && (await this.ensureListener());
+    const paste =
+      `Open authorize_url in a browser signed in to the X account to add and click "Authorize". The browser then ` +
+      `goes to ${this.cfg.redirectUri}?state=...&code=... and the page fails to load; that is expected. Copy the ` +
+      `full URL from the address bar and paste it back here right away: it is passed to complete_authorization, ` +
+      `and X codes expire about 30 seconds after approval.`;
     const note = listening
-      ? `Open authorize_url in a browser signed in to the X account to add. After you click "Authorize", the browser returns to ${this.cfg.redirectUri} and the account is saved automatically. Then call auth_status (or list_accounts) to confirm.`
-      : `Could not listen on ${this.cfg.redirectUri} (${this.serverError}). Open authorize_url, approve, then IMMEDIATELY paste the full URL from the browser's address bar into complete_authorization (X codes expire about 30 seconds after approval).`;
-    return { authorize_url: buildAuthorizeUrl(this.cfg, clientId, state, challenge), state, listening, note };
+      ? `Open authorize_url in a browser on this same computer, signed in to the X account to add. After you click "Authorize", the browser returns to ${this.cfg.redirectUri} and the account is saved automatically. Then call auth_status (or list_accounts) to confirm. If the browser is on another device, use the paste flow: copy the callback URL from the address bar into complete_authorization within 30 seconds.`
+      : this.cfg.authMode === "paste"
+        ? paste
+        : `Could not listen on ${this.cfg.redirectUri} (${this.serverError}). ${paste}`;
+    return {
+      authorize_url: buildAuthorizeUrl(this.cfg, clientId, state, challenge),
+      state,
+      mode: listening ? "loopback" : "paste",
+      listening,
+      note,
+    };
   }
 
   status(state?: string): SessionState | Record<string, SessionState> {

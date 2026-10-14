@@ -110,8 +110,12 @@ export class XClient {
     const granted = new Set(a.scope.split(/\s+/));
     const missing = needed.filter((s) => !granted.has(s));
     if (missing.length) {
+      const dm = missing.some((s) => s.startsWith("dm."));
       throw new Error(
-        `@${a.username} was authorized without scope(s) ${missing.join(", ")}. Run add_account again for this account to grant them.`,
+        `@${a.username} was authorized without scope(s) ${missing.join(", ")}. ` +
+          (dm && !this.cfg.dmEnabled
+            ? "Enable Direct Messages in the X App settings, set X_ENABLE_DM=1, then run add_account again for this account."
+            : "Run add_account again for this account to grant them."),
       );
     }
   }
