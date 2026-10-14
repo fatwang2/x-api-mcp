@@ -4,6 +4,21 @@ import { AuthManager } from "./auth.js";
 import { XClient } from "./client.js";
 import { mediaStatus, uploadMedia } from "./media.js";
 import { createPost, createThread, deletePost, getMe, searchRecent } from "./posts.js";
+import {
+  getDmEvents,
+  getLists,
+  getPostEngagement,
+  getPosts,
+  getTimeline,
+  getTrends,
+  getUserRelations,
+  getUsers,
+  listAction,
+  postAction,
+  searchUsers,
+  sendDm,
+  userAction,
+} from "./social.js";
 import { VERSION } from "./version.js";
 
 const account = z
@@ -226,6 +241,22 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     run(({ account, post_id }) => deletePost(client, account, post_id)),
   );
 
+  server.registerTool(
+    "post_action",
+    {
+      description:
+        "Interact with a post as the given account: like, unlike, repost, unrepost, bookmark, unbookmark, " +
+        "hide_reply or unhide_reply (replies to your own posts).",
+      inputSchema: {
+        account,
+        action: z.enum(["like", "unlike", "repost", "unrepost", "bookmark", "unbookmark", "hide_reply", "unhide_reply"]),
+        post_id: z.string(),
+      },
+      annotations: { openWorldHint: true, idempotentHint: true },
+    },
+    run((a) => postAction(client, a)),
+  );
+
   // ---- media ----------------------------------------------------------------------------
 
   server.registerTool(
@@ -239,7 +270,10 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
         file_path: z.string().optional().describe("Absolute path to a local file (jpg/png/webp/gif/mp4/mov)"),
         base64: z.string().optional().describe("Base64 data (or data: URL) instead of file_path"),
         mime_type: z.string().optional().describe("Required for base64 without a data: prefix"),
-        media_category: z.enum(["tweet_image", "tweet_gif", "tweet_video", "subtitles"]).optional(),
+        media_category: z
+          .enum(["tweet_image", "tweet_gif", "tweet_video", "dm_image", "dm_gif", "dm_video", "subtitles"])
+          .optional()
+          .describe("Inferred from the file type for posts; use dm_* for direct messages"),
         alt_text: z.string().max(1000).optional(),
       },
       annotations: { openWorldHint: true },
@@ -259,23 +293,181 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
 
   // ---- reading --------------------------------------------------------------------------
 
+  const paging = {
+    max_results: z.number().int().min(1).max(1000).optional().describe("Page size; clamped to what the endpoint allows"),
+    pagination_token: z.string().optional().describe("meta.next_token from the previous page"),
+  };
+  const user = z.string().describe('A user: "@username", "username", or a numeric user ID');
+
   server.registerTool(
-    "search_recent_posts",
+    "search",
     {
       description:
-        "Search posts from the last 7 days (GET /2/tweets/search/recent). Billed per post returned, so keep max_results small.",
+        "Search X. type=posts: posts from the last 7 days (billed per post returned, keep max_results small). " +
+        "type=users: search accounts by keyword.",
       inputSchema: {
         account,
-        query: z.string().min(1).max(4096).describe("X search query, e.g. 'from:xdevelopers -is:retweet'"),
-        max_results: z.number().int().min(10).max(100).optional().describe("10-100, default 10"),
-        sort_order: z.enum(["recency", "relevancy"]).optional(),
-        start_time: z.string().optional().describe("ISO 8601, within the last 7 days"),
-        end_time: z.string().optional(),
+        type: z.enum(["posts", "users"]).optional().describe("Default posts"),
+        query: z.string().min(1).max(4096).describe("For posts, X search syntax, e.g. 'from:xdevelopers -is:retweet'"),
+        max_results: z.number().int().min(1).max(1000).optional().describe("posts: 10-100 (default 10); users: 1-1000 (default 10)"),
+        sort_order: z.enum(["recency", "relevancy"]).optional().describe("posts only"),
+        start_time: z.string().optional().describe("posts only; ISO 8601 within the last 7 days"),
+        end_time: z.string().optional().describe("posts only"),
         next_token: z.string().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    run((a) => searchRecent(client, a)),
+    run(({ type, ...a }) => (type === "users" ? searchUsers(client, a) : searchRecent(client, a))),
+  );
+
+  server.registerTool(
+    "get_posts",
+    {
+      description: "Look up posts by ID (1-100), with author, metrics, media and referenced posts. Billed per post.",
+      inputSchema: { account, ids: z.array(z.string()).min(1).max(100) },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    run((a) => getPosts(client, a)),
+  );
+
+  server.registerTool(
+    "get_timeline",
+    {
+      description:
+        "Read a timeline. type: home (your reverse-chronological home feed), posts (a user's posts), mentions, " +
+        "liked (posts a user liked), bookmarks (yours). `user` defaults to the account itself. Billed per post returned.",
+      inputSchema: {
+        account,
+        type: z.enum(["home", "posts", "mentions", "liked", "bookmarks"]),
+        user: user.optional(),
+        ...paging,
+        exclude: z.array(z.enum(["replies", "retweets"])).optional().describe("home/posts only"),
+        start_time: z.string().optional().describe("home/posts/mentions; ISO 8601"),
+        end_time: z.string().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    run((a) => getTimeline(client, a)),
+  );
+
+  server.registerTool(
+    "get_post_engagement",
+    {
+      description: "Who engaged with a post. type: liking_users, reposted_by (users), or quotes (quote posts).",
+      inputSchema: { account, post_id: z.string(), type: z.enum(["liking_users", "reposted_by", "quotes"]), ...paging },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    run((a) => getPostEngagement(client, a)),
+  );
+
+  // ---- users ----------------------------------------------------------------------------
+
+  server.registerTool(
+    "get_users",
+    {
+      description: "Look up user profiles by usernames or by numeric IDs (up to 100). Billed per user.",
+      inputSchema: {
+        account,
+        usernames: z.array(z.string()).max(100).optional(),
+        ids: z.array(z.string()).max(100).optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    run((a) => getUsers(client, a)),
+  );
+
+  server.registerTool(
+    "get_user_relations",
+    {
+      description:
+        "List followers or following of a user (default: the account itself), or the account's own muting/blocking list.",
+      inputSchema: { account, type: z.enum(["followers", "following", "muting", "blocking"]), user: user.optional(), ...paging },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    run((a) => getUserRelations(client, a)),
+  );
+
+  server.registerTool(
+    "user_action",
+    {
+      description:
+        "Follow, unfollow, mute, unmute, block or unblock a user as the given account. " +
+        "X documents block as Enterprise-only, so it may be refused on pay-per-use apps.",
+      inputSchema: { account, action: z.enum(["follow", "unfollow", "mute", "unmute", "block", "unblock"]), user },
+      annotations: { openWorldHint: true, idempotentHint: true },
+    },
+    run((a) => userAction(client, a)),
+  );
+
+  // ---- direct messages ------------------------------------------------------------------
+
+  server.registerTool(
+    "send_dm",
+    {
+      description:
+        "Send a direct message to a user (`to`) or into an existing conversation (`conversation_id`). " +
+        "Media in media_files is uploaded with DM categories automatically. Only send when the user confirmed recipient and text.",
+      inputSchema: {
+        account,
+        to: user.optional(),
+        conversation_id: z.string().optional(),
+        text: z.string().optional(),
+        media_ids: z.array(z.string()).max(1).optional().describe("A media_id uploaded with a dm_* media_category"),
+        media_files: mediaFiles,
+      },
+      annotations: { openWorldHint: true },
+    },
+    run((a) => sendDm(client, a)),
+  );
+
+  server.registerTool(
+    "get_dm_events",
+    {
+      description: "Read recent direct messages: all conversations, one user (`with`), or one conversation_id.",
+      inputSchema: { account, with: user.optional(), conversation_id: z.string().optional(), ...paging },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    run((a) => getDmEvents(client, a)),
+  );
+
+  // ---- lists & trends -------------------------------------------------------------------
+
+  server.registerTool(
+    "list_action",
+    {
+      description: "Manage X Lists: create, update, delete, add_member, remove_member.",
+      inputSchema: {
+        account,
+        action: z.enum(["create", "update", "delete", "add_member", "remove_member"]),
+        list_id: z.string().optional().describe("Required except for create"),
+        name: z.string().min(1).max(25).optional(),
+        description: z.string().max(100).optional(),
+        private: z.boolean().optional(),
+        user: user.optional().describe("Member for add_member / remove_member"),
+      },
+      annotations: { openWorldHint: true },
+    },
+    run((a) => listAction(client, a)),
+  );
+
+  server.registerTool(
+    "get_lists",
+    {
+      description: "Read Lists. type: owned (lists a user owns, default the account), info, members, or posts of list_id.",
+      inputSchema: { account, type: z.enum(["owned", "info", "members", "posts"]), list_id: z.string().optional(), user: user.optional(), ...paging },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    run((a) => getLists(client, a)),
+  );
+
+  server.registerTool(
+    "get_trends",
+    {
+      description: "Personalized trends for the account.",
+      inputSchema: { account },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    run((a) => getTrends(client, a)),
   );
 
   return server;

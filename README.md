@@ -1,6 +1,6 @@
 # x-api-mcp
 
-基于 X 官方 API v2 的**本地 stdio MCP 服务器**，核心是多账号发帖：发帖、回复、串推（thread）、删帖、图片/GIF/视频上传（含分块上传），外加 `users/me` 和近 7 天搜索。
+基于 X 官方 API v2 的**本地 stdio MCP 服务器**，核心是多账号发帖：发帖、回复、串推（thread）、删帖、图片/GIF/视频上传（含分块上传），同时覆盖点赞、转发、书签、关注、时间线、搜索、私信、列表和趋势。
 
 X 官方的 remote MCP 不支持发帖，这个项目补的就是这块。
 
@@ -56,21 +56,32 @@ claude mcp add x -e X_CLIENT_ID=你的ClientID -- node /绝对路径/x-api-mcp/d
 
 ## 工具
 
-| 工具 | 作用 | 是否计费 |
-| --- | --- | --- |
-| `list_accounts` | 列出本机已授权账号 | 免费 |
-| `add_account` / `auth_status` | 发起 OAuth 2.0 PKCE 授权 / 查看授权结果 | 授权完成时调用一次 `users/me` |
-| `complete_authorization` | 回调监听不可用时，粘贴回调 URL 手动完成（授权码约 30 秒过期） | 同上 |
-| `set_default_account` / `remove_account` | 切换默认账号 / 删除账号并吊销 token | 免费 |
-| `get_me` | `GET /2/users/me` | 是 |
-| `create_post` | 发帖、回复（`reply_to_post_id`）、引用、投票、附媒体（可直接传本地文件 `media_files`） | 是 |
-| `create_thread` | 按顺序发串推，遇错即停并返回已发出的部分 | 每条都计费 |
-| `delete_post` | 删帖 | 是 |
-| `upload_media` | ≤5 MB 图片一次上传；GIF、视频和大文件走 initialize/append/finalize 分块上传并等待处理完成；可设 alt text | 见官方价格 |
-| `get_media_status` | 查询视频处理状态 | 是 |
-| `search_recent_posts` | 近 7 天搜索 | 按返回条数计费 |
+工具按“动作”合并，而不是一个端点一个工具，共 25 个，方便 agent 选择。所有工具都有可选的 `account` 参数（不填用默认账号）；需要指定用户的地方传 `@用户名`、`用户名` 或数字 ID。
 
-价格以 [官方价格页](https://docs.x.com/x-api/getting-started/pricing) 和控制台为准。注意：带 URL 的帖子单价明显更高；`quote_post_id` 目前官方文档标注仅 Enterprise 可用。
+| 分组 | 工具 | 说明 |
+| --- | --- | --- |
+| 账号 | `list_accounts` `add_account` `auth_status` `complete_authorization` `set_default_account` `remove_account` `get_me` | 多账号授权与管理；只有 `get_me` 会调用 API |
+| 发帖 | `create_post` | 发帖、回复、引用、投票、附媒体（可直接传本地文件） |
+| | `create_thread` | 按顺序发串推，遇错即停并返回已发出的部分 |
+| | `delete_post` | 删帖 |
+| | `post_action` | like / unlike / repost / unrepost / bookmark / unbookmark / hide_reply / unhide_reply |
+| 媒体 | `upload_media` `get_media_status` | ≤5 MB 图片一次上传；GIF、视频、大文件分块上传并等处理完成；可设 alt text |
+| 读取 | `search` | `type=posts` 近 7 天搜帖，`type=users` 搜用户 |
+| | `get_posts` | 按 ID 批量查帖子 |
+| | `get_timeline` | home（首页时间线）/ posts / mentions / liked / bookmarks |
+| | `get_post_engagement` | 点赞用户 / 转发用户 / 引用帖 |
+| 用户 | `get_users` | 按用户名或 ID 批量查资料 |
+| | `get_user_relations` | followers / following，以及自己的 muting / blocking 列表 |
+| | `user_action` | follow / unfollow / mute / unmute / block / unblock |
+| 私信 | `send_dm` `get_dm_events` | 发私信（给用户或已有会话，可带媒体）/ 读私信 |
+| 列表 | `list_action` `get_lists` | 创建、修改、删除列表，增删成员 / 查看自己的列表、列表信息、成员、帖子 |
+| 趋势 | `get_trends` | 个性化趋势 |
+
+几乎所有调用都按量计费，价格以 [官方价格页](https://docs.x.com/x-api/getting-started/pricing) 和控制台为准。带 URL 的帖子单价明显更高；官方文档标注 `quote_post_id` 和 block 仅 Enterprise 可用。
+
+授权时默认申请所有用到的 scope。如果某个账号授权时少了某个权限（比如用旧版授权的账号），调用会在请求 X 之前直接提示“重新 add_account”。
+
+暂未覆盖：Spaces、社区、书签文件夹、私信删除、流式接口、广告与合规接口。
 
 ## 环境变量
 
@@ -79,7 +90,7 @@ claude mcp add x -e X_CLIENT_ID=你的ClientID -- node /绝对路径/x-api-mcp/d
 | `X_CLIENT_ID` | — | 必填 |
 | `X_CLIENT_SECRET` | — | 仅 Web App（机密客户端）需要 |
 | `X_REDIRECT_URI` | `http://127.0.0.1:8765/callback` | 需与 App 设置一致 |
-| `X_SCOPES` | `tweet.read tweet.write users.read media.write offline.access` | |
+| `X_SCOPES` | 全部用到的读写 scope（见 `src/config.ts`） | 想收窄权限时设置 |
 | `X_API_MCP_HOME` | `~/.x-api-mcp` | token 存放目录 |
 | `X_DEFAULT_ACCOUNT` | — | 没有在本地设置默认账号时使用 |
 
@@ -100,7 +111,7 @@ x-api-mcp post [--account a] <文本>   快速发一条测试帖
 npm test   # 编译后对本地模拟的 X API 跑端到端测试（OAuth、续期轮换、并发锁、串推、分块上传、stdio 协议）
 ```
 
-代码结构：`src/oauth.ts`（PKCE 与 token 端点）、`src/auth.ts`（授权流程与本地回调）、`src/store.ts`（token 文件与锁）、`src/client.ts`（带自动续期的 API 客户端）、`src/posts.ts`、`src/media.ts`、`src/server.ts`（MCP 工具注册）、`src/index.ts`（入口与 CLI）。
+代码结构：`src/oauth.ts`（PKCE 与 token 端点）、`src/auth.ts`（授权流程与本地回调）、`src/store.ts`（token 文件与锁）、`src/client.ts`（带自动续期的 API 客户端）、`src/posts.ts`（发帖）、`src/social.ts`（互动、关系、时间线、私信、列表）、`src/shape.ts`（返回结果精简）、`src/media.ts`、`src/server.ts`（MCP 工具注册）、`src/index.ts`（入口与 CLI）。
 
 ## 参考
 

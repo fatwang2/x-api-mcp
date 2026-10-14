@@ -14,6 +14,7 @@ let posts = 0;
 const issued = new Map(); // access token -> username
 const validRefresh = new Map(); // refresh token -> username (rotated on use)
 let mock;
+const SCOPES = "tweet.read tweet.write tweet.moderate.write users.read follows.read follows.write like.read like.write bookmark.read bookmark.write mute.read mute.write block.read block.write list.read list.write dm.read dm.write media.write offline.access";
 let apiBase;
 
 function readBody(req) {
@@ -31,7 +32,7 @@ function issue(res, username, status = 200) {
   issued.set(access, username);
   validRefresh.set(refresh, username);
   res.writeHead(status, { "content-type": "application/json" });
-  res.end(JSON.stringify({ token_type: "bearer", access_token: access, refresh_token: refresh, expires_in: 7200, scope: "tweet.read tweet.write users.read media.write offline.access" }));
+  res.end(JSON.stringify({ token_type: "bearer", access_token: access, refresh_token: refresh, expires_in: 7200, scope: SCOPES }));
 }
 
 before(async () => {
@@ -72,6 +73,20 @@ before(async () => {
     if (url.pathname === "/2/media/upload" && req.method === "GET") return json(200, { data: { id: "777", processing_info: { state: "succeeded", progress_percent: 100 } } });
     if (url.pathname === "/2/media/metadata") return json(200, { data: { id: JSON.parse(body.toString()).id } });
     if (url.pathname === "/2/tweets/search/recent") return json(200, { data: [{ id: "1", text: "hi", author_id: "u1" }], includes: { users: [{ id: "u1", username: "alice", name: "Alice" }] }, meta: { result_count: 1 } });
+    let m;
+    if ((m = url.pathname.match(/^\/2\/users\/by\/username\/(\w+)$/))) return json(200, { data: { id: `id-${m[1]}`, username: m[1], name: m[1] } });
+    if ((m = url.pathname.match(/^\/2\/users\/[^/]+\/(likes|retweets|bookmarks|following|muting)$/)) && req.method === "POST") {
+      const key = { likes: "liked", retweets: "retweeted", bookmarks: "bookmarked", following: "following", muting: "muting" }[m[1]];
+      return json(200, { data: { [key]: true } });
+    }
+    if ((m = url.pathname.match(/^\/2\/users\/[^/]+\/(likes|retweets|bookmarks|following|muting)\/[^/]+$/)) && req.method === "DELETE") return json(200, { data: { ok: false } });
+    if (/^\/2\/tweets\/\d+\/hidden$/.test(url.pathname) && req.method === "PUT") return json(200, { data: { hidden: JSON.parse(body.toString()).hidden } });
+    if (/^\/2\/users\/[^/]+\/(tweets|mentions|liked_tweets|bookmarks|timelines\/reverse_chronological)$/.test(url.pathname)) {
+      return json(200, { data: [{ id: "9", text: "t", author_id: "u1", attachments: { media_keys: ["3_1"] } }], includes: { users: [{ id: "u1", username: "alice" }], media: [{ media_key: "3_1", type: "photo" }] }, meta: { result_count: 1, next_token: "n" } });
+    }
+    if (/^\/2\/users\/[^/]+\/(followers|following)$/.test(url.pathname)) return json(200, { data: [{ id: "u2", username: "carol" }], meta: { result_count: 1 } });
+    if (/^\/2\/dm_conversations\/with\/[^/]+\/messages$/.test(url.pathname)) return json(201, { data: { dm_conversation_id: "c1", dm_event_id: "e1" } });
+    if (url.pathname === "/2/lists" && req.method === "POST") return json(201, { data: { id: "L1", name: JSON.parse(body.toString()).name } });
     json(404, { detail: "not mocked " + url.pathname });
   });
   await new Promise((r) => mock.listen(0, "127.0.0.1", r));
@@ -202,6 +217,63 @@ test("media: simple image with alt text, chunked video with processing", async (
   assert.ok(calls.some((c) => c.method === "GET" && c.query.command === "STATUS"));
 });
 
+test("interactions, relationships, timelines, DMs, lists and scope checks", async () => {
+  const { client } = await setup();
+  const S = await import("../dist/social.js");
+  const like = await S.postAction(client, { account: "bob", action: "like", post_id: "42" });
+  assert.deepEqual(like.result, { liked: true });
+  let c = calls.at(-1);
+  assert.equal(c.path, "/2/users/id-bob/likes");
+  assert.deepEqual(JSON.parse(c.body.toString()), { tweet_id: "42" });
+  await S.postAction(client, { account: "bob", action: "unrepost", post_id: "42" });
+  assert.equal(calls.at(-1).method + " " + calls.at(-1).path, "DELETE /2/users/id-bob/retweets/42");
+  const hide = await S.postAction(client, { account: "bob", action: "hide_reply", post_id: "43" });
+  assert.deepEqual(hide.result, { hidden: true });
+
+  // Locally known accounts resolve without an API call; others are looked up by username.
+  const before = calls.length;
+  const f1 = await S.userAction(client, { account: "bob", action: "follow", user: "@alice" });
+  assert.equal(f1.user_id, "id-alice");
+  assert.equal(calls.length - before, 1);
+  const f2 = await S.userAction(client, { account: "bob", action: "follow", user: "@jack" });
+  assert.equal(f2.user_id, "id-jack");
+  assert.equal(calls.at(-2).path, "/2/users/by/username/jack");
+  assert.deepEqual(JSON.parse(calls.at(-1).body.toString()), { target_user_id: "id-jack" });
+  await S.userAction(client, { account: "bob", action: "unmute", user: "12345" });
+  assert.equal(calls.at(-1).path, "/2/users/id-bob/muting/12345");
+
+  const home = await S.getTimeline(client, { account: "bob", type: "home", exclude: ["replies"] });
+  assert.equal(calls.at(-1).path, "/2/users/id-bob/timelines/reverse_chronological");
+  assert.equal(calls.at(-1).query.exclude, "replies");
+  assert.equal(home.posts[0].url, "https://x.com/alice/status/9");
+  assert.equal(home.posts[0].media[0].type, "photo");
+  await S.getTimeline(client, { account: "bob", type: "posts", user: "alice", max_results: 1 });
+  assert.equal(calls.at(-1).path, "/2/users/id-alice/tweets");
+  assert.equal(calls.at(-1).query.max_results, "5");
+  await assert.rejects(S.getTimeline(client, { account: "bob", type: "bookmarks", user: "alice" }), /only available/);
+
+  const rel = await S.getUserRelations(client, { account: "bob", type: "followers", user: "alice" });
+  assert.equal(rel.users[0].username, "carol");
+
+  const dm = await S.sendDm(client, { account: "bob", to: "@alice", text: "hi" });
+  assert.deepEqual(dm, { dm_conversation_id: "c1", dm_event_id: "e1" });
+  assert.equal(calls.at(-1).path, "/2/dm_conversations/with/id-alice/messages");
+  await assert.rejects(S.sendDm(client, { account: "bob", text: "hi" }), /exactly one/);
+
+  const list = await S.listAction(client, { account: "bob", action: "create", name: "friends", private: true });
+  assert.equal(list.result.id, "L1");
+
+  // An account authorized with fewer scopes gets an actionable error before any API call.
+  const d = client.store.read();
+  d.accounts.bob.scope = "tweet.read tweet.write users.read offline.access";
+  client.store.write(d);
+  const n = calls.length;
+  await assert.rejects(S.postAction(client, { account: "bob", action: "like", post_id: "1" }), /without scope\(s\) like\.write.*add_account/);
+  assert.equal(calls.length, n);
+  d.accounts.bob.scope = SCOPES;
+  client.store.write(d);
+});
+
 test("stdio MCP server lists tools and posts through tools/call", async () => {
   const child = spawn(process.execPath, [path.resolve("dist/index.js")], { env: process.env, stdio: ["pipe", "pipe", "inherit"] });
   let buf = "";
@@ -229,14 +301,16 @@ test("stdio MCP server lists tools and posts through tools/call", async () => {
   const names = list.result.tools.map((t) => t.name).sort();
   assert.deepEqual(names, [
     "add_account", "auth_status", "complete_authorization", "create_post", "create_thread", "delete_post",
-    "get_me", "get_media_status", "list_accounts", "remove_account", "search_recent_posts", "set_default_account", "upload_media",
+    "get_dm_events", "get_lists", "get_me", "get_media_status", "get_post_engagement", "get_posts", "get_timeline",
+    "get_trends", "get_user_relations", "get_users", "list_accounts", "list_action",
+    "post_action", "remove_account", "search", "send_dm", "set_default_account", "upload_media", "user_action",
   ]);
   const post = await rpc("tools/call", { name: "create_post", arguments: { account: "bob", text: "via mcp" } });
   assert.equal(post.result.isError, undefined);
   assert.equal(JSON.parse(post.result.content[0].text).account, "bob");
   const bad = await rpc("tools/call", { name: "create_post", arguments: { account: "nobody", text: "x" } });
   assert.equal(bad.result.isError, true);
-  const search = await rpc("tools/call", { name: "search_recent_posts", arguments: { query: "hi" } });
+  const search = await rpc("tools/call", { name: "search", arguments: { query: "hi" } });
   assert.equal(JSON.parse(search.result.content[0].text).posts[0].url, "https://x.com/alice/status/1");
   const rm = await rpc("tools/call", { name: "remove_account", arguments: { account: "alice" } });
   assert.deepEqual(JSON.parse(rm.result.content[0].text), { removed: "alice", revoked: true });

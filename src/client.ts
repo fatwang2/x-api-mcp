@@ -9,6 +9,8 @@ export interface RequestOptions {
   query?: Record<string, string | number | undefined>;
   json?: unknown;
   form?: FormData;
+  /** OAuth scopes the endpoint needs; checked against the account's granted scopes first. */
+  scopes?: string[];
 }
 
 /** Authenticated X API v2 client that acts on behalf of one of the locally stored accounts. */
@@ -83,6 +85,7 @@ export class XClient {
     opts: RequestOptions = {},
   ): Promise<T> {
     const key = this.resolveAccount(account);
+    this.checkScopes(key, opts.scopes);
     let token = await this.getAccessToken(key);
     for (let attempt = 0; ; attempt++) {
       const r = await this.raw(token, method, path, opts);
@@ -99,6 +102,23 @@ export class XClient {
       }
       return body as T;
     }
+  }
+
+  private checkScopes(key: string, needed?: string[]) {
+    const a = this.getAccount(key);
+    if (!needed?.length || !a.scope) return;
+    const granted = new Set(a.scope.split(/\s+/));
+    const missing = needed.filter((s) => !granted.has(s));
+    if (missing.length) {
+      throw new Error(
+        `@${a.username} was authorized without scope(s) ${missing.join(", ")}. Run add_account again for this account to grant them.`,
+      );
+    }
+  }
+
+  /** User ID of a stored account (no API call). */
+  userId(account?: string): string {
+    return this.getAccount(this.resolveAccount(account)).user_id;
   }
 
   /** Unauthenticated-by-store request with an explicit bearer token (used right after OAuth). */
