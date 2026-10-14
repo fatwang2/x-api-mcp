@@ -1,120 +1,126 @@
 # x-api-mcp
 
-基于 X 官方 API v2 的**本地 stdio MCP 服务器**，核心是多账号发帖：发帖、回复、串推（thread）、删帖、图片/GIF/视频上传（含分块上传），同时覆盖点赞、转发、书签、关注、时间线、搜索、私信、列表和趋势。
+A **local stdio MCP server** for the official X API v2, built around multi-account posting: posts, replies, threads, deletes, and image/GIF/video uploads (including chunked upload). It also covers likes, reposts, bookmarks, follows, timelines, search, DMs, Lists and trends.
 
-X 官方的 remote MCP 不支持发帖，这个项目补的就是这块。
+X's official remote MCP server can't post. This project fills that gap.
 
-## 为什么是 stdio
+## Why stdio
 
-服务器跑在用户自己的电脑上，由 MCP 客户端（Claude Desktop、Claude Code、Cursor 等）以子进程启动。OAuth 授权、access/refresh token 都只存在本机 `~/.x-api-mcp/tokens.json`（权限 0600），不经过任何第三方服务器。
+The server runs on your own machine, launched by your MCP client (Claude Desktop, Claude Code, Cursor, ...) as a child process. OAuth and access/refresh tokens stay in `~/.x-api-mcp/tokens.json` (mode 0600) and never pass through a third-party server.
 
-## 准备一个 X App
+## Create an X App
 
-1. 在 [console.x.com](https://console.x.com) 创建 App，并充值按量计费额度。
-2. 打开 **User authentication settings**：
-   - App permissions：**Read and write**
-   - Type of App：**Native App**（公共客户端，不需要 Client Secret，推荐）；选 Web App 也可以，再额外配置 `X_CLIENT_SECRET`
-   - Callback URI：`http://127.0.0.1:8765/callback`（必须与 `X_REDIRECT_URI` 完全一致）
-3. 复制 OAuth 2.0 **Client ID**。
+Each user brings their own X App, and API usage is billed to that App's credits.
 
-> 计费说明：所有调用都计在 Client ID 所属 App 的额度上。如果你把自己的 Client ID 分发给别人用，他们发帖花的是你的钱；让每个用户用自己的 App 最稳妥。
+1. Create an App at [console.x.com](https://console.x.com) and add pay-per-use credits.
+2. Under **User authentication settings**:
+   - App permissions: **Read and write** (add **Direct Messages** if you want DM tools)
+   - Type of App: **Native App** (public client, no secret needed, recommended). A Web App also works; set `X_CLIENT_SECRET` as well.
+   - Callback URI: `http://127.0.0.1:8765/callback` (must exactly match `X_REDIRECT_URI`)
+3. Copy the OAuth 2.0 **Client ID**.
 
-## 安装与配置
+## Install and configure
 
 ```bash
-npm install && npm run build      # 发布到 npm 后可直接 npx -y x-api-mcp
+npm install && npm run build
 ```
 
-Claude Desktop / Cursor（`claude_desktop_config.json` / `.cursor/mcp.json`）：
+Claude Desktop / Cursor (`claude_desktop_config.json` / `.cursor/mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "x": {
       "command": "node",
-      "args": ["/绝对路径/x-api-mcp/dist/index.js"],
-      "env": { "X_CLIENT_ID": "你的 Client ID" }
+      "args": ["/absolute/path/to/x-api-mcp/dist/index.js"],
+      "env": { "X_CLIENT_ID": "your-client-id" }
     }
   }
 }
 ```
 
-Claude Code：
+Claude Code:
 
 ```bash
-claude mcp add x -e X_CLIENT_ID=你的ClientID -- node /绝对路径/x-api-mcp/dist/index.js
+claude mcp add x -e X_CLIENT_ID=your-client-id -- node /absolute/path/to/x-api-mcp/dist/index.js
 ```
 
-## 授权账号
+## Authorize accounts
 
-两种方式，结果相同，可以重复执行来添加多个账号：
+Either way works, and you can repeat it to add more accounts:
 
-- **在对话里**：让 AI 调用 `add_account`，打开返回的链接并在浏览器里点授权，本地监听器自动收下回调并保存 token。
-- **命令行**：`X_CLIENT_ID=... node dist/index.js login`，会自动打开浏览器并等待回调。
+- **From chat:** ask the agent to call `add_account`, open the returned URL and click Authorize. A local listener catches the callback and saves the token.
+- **From the terminal:** `X_CLIENT_ID=... node dist/index.js login` opens the browser and waits for the callback.
 
-第一个授权的账号成为默认账号；其他账号在工具调用里用 `account: "用户名"` 指定，或用 `set_default_account` 切换。access token 过期前自动用 refresh token 续期（X 的 refresh token 是轮换的，多个进程同时续期时有文件锁保护）。
+The first authorized account becomes the default. Pick another per call with `account: "username"`, or switch with `set_default_account`. Access tokens are refreshed automatically before they expire. X rotates refresh tokens, so concurrent refreshes from several MCP processes are serialized with a file lock.
 
-## 工具
+## Tools
 
-工具按“动作”合并，而不是一个端点一个工具，共 25 个，方便 agent 选择。所有工具都有可选的 `account` 参数（不填用默认账号）；需要指定用户的地方传 `@用户名`、`用户名` 或数字 ID。
+Endpoints are grouped by action rather than one tool per endpoint: 25 tools in total, so agents can choose easily. Every tool takes an optional `account` (defaults to the default account). Users can be given as `@username`, `username` or a numeric ID.
 
-| 分组 | 工具 | 说明 |
+| Group | Tool | What it does |
 | --- | --- | --- |
-| 账号 | `list_accounts` `add_account` `auth_status` `complete_authorization` `set_default_account` `remove_account` `get_me` | 多账号授权与管理；只有 `get_me` 会调用 API |
-| 发帖 | `create_post` | 发帖、回复、引用、投票、附媒体（可直接传本地文件） |
-| | `create_thread` | 按顺序发串推，遇错即停并返回已发出的部分 |
-| | `delete_post` | 删帖 |
+| Accounts | `list_accounts` `add_account` `auth_status` `complete_authorization` `set_default_account` `remove_account` `get_me` | Multi-account OAuth and management; only `get_me` calls the API |
+| Posting | `create_post` | Post, reply, quote, poll, attach media (local files can be passed directly) |
+| | `create_thread` | Publish a thread in order; stops at the first failure and returns what was posted |
+| | `delete_post` | Delete a post |
 | | `post_action` | like / unlike / repost / unrepost / bookmark / unbookmark / hide_reply / unhide_reply |
-| 媒体 | `upload_media` `get_media_status` | ≤5 MB 图片一次上传；GIF、视频、大文件分块上传并等处理完成；可设 alt text |
-| 读取 | `search` | `type=posts` 近 7 天搜帖，`type=users` 搜用户 |
-| | `get_posts` | 按 ID 批量查帖子 |
-| | `get_timeline` | home（首页时间线）/ posts / mentions / liked / bookmarks |
-| | `get_post_engagement` | 点赞用户 / 转发用户 / 引用帖 |
-| 用户 | `get_users` | 按用户名或 ID 批量查资料 |
-| | `get_user_relations` | followers / following，以及自己的 muting / blocking 列表 |
+| Media | `upload_media` `get_media_status` | Images up to 5 MB in one request; GIFs, videos and large files via chunked upload, waiting for processing; optional alt text |
+| Reading | `search` | `type=posts` searches the last 7 days, `type=users` searches accounts |
+| | `get_posts` | Look up posts by ID |
+| | `get_timeline` | home / posts / mentions / liked / bookmarks |
+| | `get_post_engagement` | Liking users / reposted by / quote posts |
+| Users | `get_users` | Look up profiles by username or ID |
+| | `get_user_relations` | followers / following, plus your own muting / blocking lists |
 | | `user_action` | follow / unfollow / mute / unmute / block / unblock |
-| 私信 | `send_dm` `get_dm_events` | 发私信（给用户或已有会话，可带媒体）/ 读私信 |
-| 列表 | `list_action` `get_lists` | 创建、修改、删除列表，增删成员 / 查看自己的列表、列表信息、成员、帖子 |
-| 趋势 | `get_trends` | 个性化趋势 |
+| DMs | `send_dm` `get_dm_events` | Send a DM to a user or conversation (with media) / read DMs |
+| Lists | `list_action` `get_lists` | Create, update, delete Lists and manage members / read owned Lists, List info, members and posts |
+| Trends | `get_trends` | Personalized trends |
 
-几乎所有调用都按量计费，价格以 [官方价格页](https://docs.x.com/x-api/getting-started/pricing) 和控制台为准。带 URL 的帖子单价明显更高；官方文档标注 `quote_post_id` 和 block 仅 Enterprise 可用。
+Almost every call is billed per use; see the [pricing page](https://docs.x.com/x-api/getting-started/pricing) and your console for current rates. Posts containing a URL cost noticeably more. X documents `quote_post_id` and blocking as Enterprise-only.
 
-授权时默认申请所有用到的 scope。如果某个账号授权时少了某个权限（比如用旧版授权的账号），调用会在请求 X 之前直接提示“重新 add_account”。
+By default authorization requests every scope these tools use. If an account was authorized with fewer scopes, calls that need a missing scope fail before reaching X with a hint to run `add_account` again.
 
-暂未覆盖：Spaces、书签文件夹、私信删除、流式接口、广告与合规接口。
+Not covered: Spaces, bookmark folders, DM deletion, streaming endpoints, Ads and compliance endpoints.
 
-## 环境变量
+## Environment variables
 
-| 变量 | 默认值 | 说明 |
+| Variable | Default | Notes |
 | --- | --- | --- |
-| `X_CLIENT_ID` | — | 必填 |
-| `X_CLIENT_SECRET` | — | 仅 Web App（机密客户端）需要 |
-| `X_REDIRECT_URI` | `http://127.0.0.1:8765/callback` | 需与 App 设置一致 |
-| `X_SCOPES` | 全部用到的读写 scope（见 `src/config.ts`） | 想收窄权限时设置 |
-| `X_API_MCP_HOME` | `~/.x-api-mcp` | token 存放目录 |
-| `X_DEFAULT_ACCOUNT` | — | 没有在本地设置默认账号时使用 |
+| `X_CLIENT_ID` | none | Required |
+| `X_CLIENT_SECRET` | none | Only for Web Apps (confidential clients) |
+| `X_REDIRECT_URI` | `http://127.0.0.1:8765/callback` | Must match the App settings |
+| `X_SCOPES` | All scopes the tools use (see `src/config.ts`) | Set to narrow permissions |
+| `X_API_MCP_HOME` | `~/.x-api-mcp` | Token storage directory |
+| `X_DEFAULT_ACCOUNT` | none | Used when no default account is set locally |
 
-## 命令行
+## CLI
 
 ```
-x-api-mcp                    以 stdio 方式运行 MCP 服务器
-x-api-mcp login              浏览器授权新账号
-x-api-mcp accounts           列出账号（* 为默认）
-x-api-mcp default <用户名>    设置默认账号
-x-api-mcp logout <用户名>     删除账号并吊销 token
-x-api-mcp post [--account a] <文本>   快速发一条测试帖
+x-api-mcp                       Run the MCP server on stdio
+x-api-mcp login                 Authorize a new account in the browser
+x-api-mcp accounts              List accounts (* marks the default)
+x-api-mcp default <username>    Set the default account
+x-api-mcp logout <username>     Remove an account and revoke its tokens
+x-api-mcp post [--account a] <text>   Publish a quick test post
 ```
 
-## 开发
+## Development
 
 ```bash
-npm test   # 编译后对本地模拟的 X API 跑端到端测试（OAuth、续期轮换、并发锁、串推、分块上传、stdio 协议）
+npm test   # builds, then runs end-to-end tests against a local mock of the X API
 ```
 
-代码结构：`src/oauth.ts`（PKCE 与 token 端点）、`src/auth.ts`（授权流程与本地回调）、`src/store.ts`（token 文件与锁）、`src/client.ts`（带自动续期的 API 客户端）、`src/posts.ts`（发帖）、`src/social.ts`（互动、关系、时间线、私信、列表）、`src/shape.ts`（返回结果精简）、`src/media.ts`、`src/server.ts`（MCP 工具注册）、`src/index.ts`（入口与 CLI）。
+The tests cover OAuth, refresh-token rotation, the concurrency lock, threads, chunked upload, interactions, DMs and the stdio protocol.
 
-## 参考
+Layout: `src/oauth.ts` (PKCE and token endpoint), `src/auth.ts` (authorization flow and loopback callback), `src/store.ts` (token file and lock), `src/client.ts` (API client with auto refresh and scope checks), `src/posts.ts` (posting), `src/social.ts` (interactions, relationships, timelines, DMs, Lists), `src/shape.ts` (response trimming), `src/media.ts`, `src/server.ts` (MCP tool registration), `src/index.ts` (entry point and CLI).
 
-- [OAuth 2.0 PKCE](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code)、[发帖](https://docs.x.com/x-api/posts/create-post)、[分块上传](https://docs.x.com/x-api/media/quickstart/media-upload-chunked)
-- [xdevplatform/xurl](https://github.com/xdevplatform/xurl)、[xdevplatform/xmcp](https://github.com/xdevplatform/xmcp)
+## References
+
+- [OAuth 2.0 PKCE](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code), [Create Post](https://docs.x.com/x-api/posts/create-post), [Chunked media upload](https://docs.x.com/x-api/media/quickstart/media-upload-chunked)
+- [xdevplatform/xurl](https://github.com/xdevplatform/xurl), [xdevplatform/xmcp](https://github.com/xdevplatform/xmcp)
 - [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
+
+## License
+
+MIT
