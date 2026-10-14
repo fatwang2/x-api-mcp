@@ -1,0 +1,25 @@
+{
+  "name": "x-api-mcp",
+  "version": "0.1.0",
+  "description": "Local stdio MCP server for the official X API: multi-account posting, threads, media upload. Tokens never leave your machine.",
+  "type": "module",
+  "bin": { "x-api-mcp": "dist/index.js" },
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "start": "node dist/index.js"
+  },
+  "keywords": ["mcp", "x", "twitter", "x-api", "oauth2", "model-context-protocol"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  }
+}
