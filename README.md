@@ -81,7 +81,7 @@ claude mcp add x -e X_CLIENT_ID=你的ClientID -- node /绝对路径/x-api-mcp/d
 
 授权时默认申请所有用到的 scope。如果某个账号授权时少了某个权限（比如用旧版授权的账号），调用会在请求 X 之前直接提示“重新 add_account”。
 
-暂未覆盖：Spaces、社区、书签文件夹、私信删除、流式接口、广告与合规接口。
+暂未覆盖：Spaces、书签文件夹、私信删除、流式接口、广告与合规接口。
 
 ## 环境变量
 

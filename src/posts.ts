@@ -16,7 +16,6 @@ export interface PostInput {
   media_files?: MediaFile[];
   poll?: { options: string[]; duration_minutes: number };
   reply_settings?: "following" | "mentionedUsers" | "subscribers" | "verified";
-  community_id?: string;
   made_with_ai?: boolean;
   paid_partnership?: boolean;
 }
@@ -48,7 +47,6 @@ export async function createPost(client: XClient, input: PostInput): Promise<Pos
   if (mediaIds.length) body.media = { media_ids: mediaIds };
   if (input.poll) body.poll = input.poll;
   if (input.reply_settings) body.reply_settings = input.reply_settings;
-  if (input.community_id) body.community_id = String(input.community_id);
   if (input.made_with_ai) body.made_with_ai = true;
   if (input.paid_partnership) body.paid_partnership = true;
 

@@ -196,7 +196,6 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
           })
           .optional(),
         reply_settings: z.enum(["following", "mentionedUsers", "subscribers", "verified"]).optional().describe("Who can reply"),
-        community_id: z.string().optional(),
         made_with_ai: z.boolean().optional().describe("Disclose AI-generated media"),
         paid_partnership: z.boolean().optional().describe("Disclose a paid partnership"),
       },
