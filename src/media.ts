@@ -13,7 +13,14 @@ const MIME: Record<string, string> = {
   ".srt": "text/srt",
 };
 
-export type MediaCategory = "tweet_image" | "tweet_gif" | "tweet_video" | "subtitles";
+export type MediaCategory =
+  | "tweet_image"
+  | "tweet_gif"
+  | "tweet_video"
+  | "dm_image"
+  | "dm_gif"
+  | "dm_video"
+  | "subtitles";
 
 const MB = 1024 * 1024;
 const SIMPLE_MAX = 5 * MB;
@@ -72,14 +79,14 @@ export async function uploadMedia(client: XClient, input: UploadInput): Promise<
 
   const account = client.resolveAccount(input.account);
   const category = input.media_category ?? guessCategory(mime);
-  const simple = category === "tweet_image" && bytes.length <= SIMPLE_MAX;
+  const simple = (category === "tweet_image" || category === "dm_image") && bytes.length <= SIMPLE_MAX;
 
   let data: any;
   if (simple) {
     const form = new FormData();
     form.append("media", new Blob([new Uint8Array(bytes)], { type: mime }), "media");
     form.append("media_category", category);
-    data = (await client.request(account, "POST", "/2/media/upload", { form })).data;
+    data = (await client.request(account, "POST", "/2/media/upload", { form, scopes: ["media.write"] })).data;
   } else {
     data = await chunkedUpload(client, account, bytes, mime, category);
   }
@@ -109,6 +116,7 @@ async function chunkedUpload(
   category: MediaCategory,
 ): Promise<any> {
   const init = await client.request(account, "POST", "/2/media/upload/initialize", {
+    scopes: ["media.write"],
     json: { media_type: mime, total_bytes: bytes.length, media_category: category },
   });
   const id = String(init.data.id);

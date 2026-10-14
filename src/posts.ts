@@ -1,5 +1,6 @@
 import { XClient } from "./client.js";
 import { uploadMedia } from "./media.js";
+import { POST_QUERY, shapePosts } from "./shape.js";
 
 export interface MediaFile {
   file_path: string;
@@ -15,7 +16,6 @@ export interface PostInput {
   media_files?: MediaFile[];
   poll?: { options: string[]; duration_minutes: number };
   reply_settings?: "following" | "mentionedUsers" | "subscribers" | "verified";
-  community_id?: string;
   made_with_ai?: boolean;
   paid_partnership?: boolean;
 }
@@ -47,11 +47,10 @@ export async function createPost(client: XClient, input: PostInput): Promise<Pos
   if (mediaIds.length) body.media = { media_ids: mediaIds };
   if (input.poll) body.poll = input.poll;
   if (input.reply_settings) body.reply_settings = input.reply_settings;
-  if (input.community_id) body.community_id = String(input.community_id);
   if (input.made_with_ai) body.made_with_ai = true;
   if (input.paid_partnership) body.paid_partnership = true;
 
-  const j = await client.request(key, "POST", "/2/tweets", { json: body });
+  const j = await client.request(key, "POST", "/2/tweets", { json: body, scopes: ["tweet.write"] });
   return {
     id: j.data.id,
     text: j.data.text,
@@ -92,7 +91,9 @@ export async function createThread(client: XClient, input: ThreadInput): Promise
 }
 
 export async function deletePost(client: XClient, account: string | undefined, postId: string) {
-  const j = await client.request(client.resolveAccount(account), "DELETE", `/2/tweets/${encodeURIComponent(postId)}`);
+  const j = await client.request(client.resolveAccount(account), "DELETE", `/2/tweets/${encodeURIComponent(postId)}`, {
+    scopes: ["tweet.write"],
+  });
   return { post_id: postId, deleted: !!j.data?.deleted };
 }
 
@@ -129,6 +130,7 @@ export interface SearchInput {
 
 export async function searchRecent(client: XClient, input: SearchInput) {
   const j = await client.request(client.resolveAccount(input.account), "GET", "/2/tweets/search/recent", {
+    scopes: ["tweet.read", "users.read"],
     query: {
       query: input.query,
       max_results: Math.min(Math.max(input.max_results ?? 10, 10), 100),
@@ -136,21 +138,8 @@ export async function searchRecent(client: XClient, input: SearchInput) {
       start_time: input.start_time,
       end_time: input.end_time,
       next_token: input.next_token,
-      "post.fields": "created_at,author_id,conversation_id,public_metrics,lang",
-      expansions: "author_id",
-      "user.fields": "username,name,verified",
+      ...POST_QUERY,
     },
   });
-  const users = new Map<string, any>((j.includes?.users ?? []).map((u: any) => [u.id, u]));
-  return {
-    posts: (j.data ?? []).map((p: any) => {
-      const u = users.get(p.author_id);
-      return {
-        ...p,
-        author: u ? { username: u.username, name: u.name, verified: u.verified } : undefined,
-        url: u ? `https://x.com/${u.username}/status/${p.id}` : `https://x.com/i/status/${p.id}`,
-      };
-    }),
-    meta: j.meta,
-  };
+  return shapePosts(j);
 }
