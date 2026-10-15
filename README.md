@@ -135,6 +135,17 @@ The tests cover OAuth (loopback and paste), refresh-token rotation, the concurre
 
 Layout: `src/oauth.ts` (PKCE and token endpoint), `src/auth.ts` (authorization flow and loopback callback), `src/store.ts` (token file and lock), `src/client.ts` (API client with auto refresh and scope checks), `src/posts.ts` (posting), `src/social.ts` (interactions, relationships, timelines, DMs, Lists), `src/shape.ts` (response trimming), `src/media.ts`, `src/server.ts` (MCP tool registration), `src/index.ts` (entry point and CLI).
 
+## Releasing
+
+Releases are published by GitHub Actions when a version tag is pushed:
+
+```bash
+npm version patch          # or minor / major; also updates the version pinned in the plugin files
+git push --follow-tags
+```
+
+`.github/workflows/release.yml` checks that the tag matches `package.json`, runs the tests, publishes to npm with provenance and creates a GitHub release. It authenticates with [npm trusted publishing](https://docs.npmjs.com/trusted-publishers) when that is configured for this repository and `release.yml` on npmjs.com, and otherwise with an `NPM_TOKEN` repository secret.
+
 ## Privacy Policy
 
 x-api-mcp runs entirely on your computer. It has no server of its own and the author collects no data.
