@@ -2,9 +2,24 @@
 
 A **local stdio MCP server** for the official X API v2, built around multi-account posting: posts, replies, threads, deletes, and image/GIF/video uploads (including chunked upload). It also covers likes, reposts, bookmarks, follows, timelines, search, DMs, Lists and trends.
 
-X's official remote MCP server can't post. This project fills that gap.
-
 It runs on your own computer, started by your AI client as a child process. OAuth tokens stay in `~/.x-api-mcp/tokens.json` (mode 0600) and never pass through a third-party server.
+
+## Why x-api-mcp
+
+X offers two MCP servers of its own (see [X's MCP docs](https://docs.x.com/tools/mcp)). Neither is built for posting from several accounts day to day:
+
+| | x-api-mcp | X hosted MCP (`api.x.com/mcp`) | xmcp (X's self-hosted server) |
+| --- | --- | --- | --- |
+| Post, reply, quote, threads | Yes | No; writes are limited to bookmarks and Articles | Yes, one endpoint per tool |
+| Upload images, GIFs, video | Yes, chunked upload waits for processing | No | Raw upload endpoints |
+| DMs, follows, likes, Lists | Yes | No (lookups only) | Yes |
+| Several X accounts | Yes, pick one per call | Through `xurl` (`-u` picks the account) | One per server process |
+| Stays signed in | Yes, tokens saved and refreshed | Via `xurl` | No, re-authorize on every restart |
+| Install | One plugin or `npx` line | `xurl mcp` bridge | Python, `.env` file, run a local web server |
+| Tool count | 26, grouped by action | Curated set | About 120, generated from the API spec |
+| Safety rails | Agent skill (confirm before posting, name the account), optional `X_REQUIRE_ACCOUNT` and write-only mode | None beyond read-only access | Tool allowlist |
+
+Use the hosted MCP when you only need to read and search X. Use x-api-mcp when an agent should post, reply, upload media or manage interactions for one or more accounts, with tokens kept on your computer. All three use your own X App and its pay-per-use credits.
 
 ## Quick start
 
