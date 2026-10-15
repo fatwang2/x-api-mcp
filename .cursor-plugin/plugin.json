@@ -8,6 +8,7 @@
   "repository": "https://github.com/fatwang2/x-api-mcp",
   "license": "MIT",
   "keywords": ["x", "twitter", "social", "posting", "mcp"],
+  "logo": "assets/logo.svg",
   "skills": "./skills/",
   "mcpServers": "./mcp.json",
   "variables": {
