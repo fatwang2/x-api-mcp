@@ -1,7 +1,7 @@
 {
   "name": "x-api-mcp",
   "displayName": "X API",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Post, reply, thread, upload media and manage multiple X (Twitter) accounts through the official X API. Runs locally; tokens stay on your machine.",
   "author": { "name": "fatwang2", "url": "https://github.com/fatwang2" },
   "homepage": "https://github.com/fatwang2/x-api-mcp",

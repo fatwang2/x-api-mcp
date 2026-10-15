@@ -1,6 +1,6 @@
 {
   "name": "x-api-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local stdio MCP server for the official X API: multi-account posting, threads, media upload. Tokens never leave your machine.",
   "type": "module",
   "bin": {

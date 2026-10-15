@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "x-api-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Post, reply, thread, upload media and manage multiple X (Twitter) accounts through the official X API. Runs locally; tokens stay on your machine.",
   "author": { "name": "fatwang2" },
   "variables": {

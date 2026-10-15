@@ -2,7 +2,7 @@
   "mcpServers": {
     "x": {
       "command": "npx",
-      "args": ["-y", "x-api-mcp@0.2.0"],
+      "args": ["-y", "x-api-mcp@0.2.1"],
       "env": {
         "X_CLIENT_ID": "${user_config.client_id}",
         "X_CLIENT_SECRET": "${user_config.client_secret}",

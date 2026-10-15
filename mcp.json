@@ -3,7 +3,7 @@
     "x-api-mcp": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "x-api-mcp@0.2.0"],
+      "args": ["-y", "x-api-mcp@0.2.1"],
       "env": {
         "X_CLIENT_ID": "${X_CLIENT_ID}",
         "X_CLIENT_SECRET": "${X_CLIENT_SECRET}",
