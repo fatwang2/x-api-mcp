@@ -4,9 +4,15 @@ A **local stdio MCP server** for the official X API v2, built around multi-accou
 
 X's official remote MCP server can't post. This project fills that gap.
 
-## Why stdio
+It runs on your own computer, started by your AI client as a child process. OAuth tokens stay in `~/.x-api-mcp/tokens.json` (mode 0600) and never pass through a third-party server.
 
-The server runs on your own machine, launched by your MCP client (Claude Desktop, Claude Code, Cursor, ...) as a child process. OAuth and access/refresh tokens stay in `~/.x-api-mcp/tokens.json` (mode 0600) and never pass through a third-party server.
+## Quick start
+
+1. [Create an X App](#create-an-x-app) and copy its Client ID.
+2. [Install](#install) x-api-mcp in your AI client.
+3. Ask the agent to [add your X account](#add-x-accounts), then start posting.
+
+You don't need to clone this repository or build anything; every install method runs the published npm package.
 
 ## Create an X App
 
@@ -21,29 +27,45 @@ Each user brings their own X App, and API usage is billed to that App's credits.
 
 ## Install
 
-### As a Claude plugin
+| Client | How to install | Where the Client ID goes |
+| --- | --- | --- |
+| Claude Code | [Claude plugin](#claude-code) | Plugin settings form |
+| Claude desktop app (Cowork) | [Claude plugin](#claude-desktop-app-cowork) | `set_client_id` from chat |
+| Codex CLI, ChatGPT desktop app | [Codex plugin](#codex) | `set_client_id` from chat |
+| Cursor | [Cursor plugin](#cursor) or [MCP config](#any-other-mcp-client) | Plugin settings, or `X_CLIENT_ID` |
+| Claude desktop chat, Windsurf, Cline and other MCP clients | [MCP config](#any-other-mcp-client) | `X_CLIENT_ID` in the config |
+
+All plugin installs include the same MCP server plus a skill that tells the agent how to use it safely: confirm before acting, always name the account, mind the costs, and how to authorize. Everything runs locally, so plugins work only where the client runs on your computer (not in web or mobile chat).
+
+Wherever the Client ID isn't asked for at install time, either ask the agent to call `set_client_id` with it, or run `npx x-api-mcp config --client-id your-client-id` once in a terminal. It is saved in `~/.x-api-mcp/app.json`; an `X_CLIENT_ID` environment variable wins when both are set.
+
+### Claude Code
 
 ```
 /plugin install x-api-mcp --marketplace fatwang2/x-api-mcp
 ```
 
-The plugin bundles the MCP server and a skill that tells the agent how to use it safely (confirm before acting, always name the account, mind the costs, how to authorize). It asks for your Client ID and a few options when enabled. Hosts that don't prompt for plugin settings can call `set_client_id` instead.
+Choose a scope, then fill in your Client ID and options in the settings dialog (reopen it with `/plugin configure x-api-mcp@x-api-mcp`). From a shell: `claude plugin install x-api-mcp --marketplace fatwang2/x-api-mcp`.
 
-### As a Cursor plugin
+### Claude desktop app (Cowork)
 
-The repository is also a Cursor plugin: [`.cursor-plugin/plugin.json`](.cursor-plugin/plugin.json) loads the same MCP server from `mcp.json` and the same skill. After installing it, set your Client ID and the other options under **Plugins** > **Configure**, or leave the Client ID empty and call `set_client_id` from chat.
+In **Customize > Plugins**, add the GitHub marketplace `fatwang2/x-api-mcp` and install **x-api-mcp**. It runs in Cowork sessions on your computer. Cowork doesn't show plugin settings, so set the Client ID with `set_client_id`. For regular desktop chat, use the [MCP config](#any-other-mcp-client) instead.
 
-### As a Codex plugin
+### Codex
 
 ```
 codex plugin marketplace add fatwang2/x-api-mcp
 ```
 
-Then install **X API** from that marketplace in the Plugins Directory. Codex reads the root [`plugin.json`](plugin.json) and [`mcp.json`](mcp.json), so it runs the same local MCP server with the same skill, on your computer only (Codex CLI or the ChatGPT desktop app). Codex has no settings form for plugins, so set your Client ID once with `npx x-api-mcp config --client-id your-client-id`, or from chat with `set_client_id`.
+Then install **X API** from that marketplace in the Plugins Directory (Codex CLI or the ChatGPT desktop app), and set the Client ID with `set_client_id`.
 
-### As a plain MCP server
+### Cursor
 
-Claude Desktop / Cursor (`claude_desktop_config.json` / `.cursor/mcp.json`):
+Install **x-api-mcp** from **Customize** once it is listed, or have a Teams/Enterprise admin import this repository as a team marketplace (**Dashboard > Plugins & MCPs > Add Marketplace > Import from Repo**). Then fill in the Client ID and options under **Configure** on the plugin. Until then, the [MCP config](#any-other-mcp-client) works in Cursor too (`.cursor/mcp.json`).
+
+### Any other MCP client
+
+Add this to your client's MCP config (`claude_desktop_config.json`, `.cursor/mcp.json`, ...):
 
 ```json
 {
@@ -57,17 +79,15 @@ Claude Desktop / Cursor (`claude_desktop_config.json` / `.cursor/mcp.json`):
 }
 ```
 
-Claude Code:
+Or, for Claude Code without the plugin:
 
 ```bash
 claude mcp add x -e X_CLIENT_ID=your-client-id -- npx -y x-api-mcp
 ```
 
-The Client ID can also be saved once with `npx x-api-mcp config --client-id your-client-id` or from chat with the `set_client_id` tool. It is stored in `~/.x-api-mcp/app.json`, and `X_CLIENT_ID` wins when both are set.
+Requires Node.js 20 or later.
 
-The agent guidance lives in [`skills/x-api-mcp/SKILL.md`](skills/x-api-mcp/SKILL.md). The `plugin.json` and `mcp.json` at the repository root describe the same bundle in the [Agent Plugins](https://agent-plugins.org/specification) format, which Codex reads (with its listing details under `extensions.com.openai`); `.cursor-plugin/plugin.json` reuses that `mcp.json` for Cursor.
-
-## Authorize accounts
+## Add X accounts
 
 Call `add_account` from chat (or run `npx x-api-mcp login` in a terminal) and open the returned URL. Repeat to add more accounts. How the callback comes back depends on where the browser is:
 
@@ -108,7 +128,9 @@ By default authorization requests every scope these tools use except DM scopes, 
 
 Not covered: Spaces, bookmark folders, DM deletion, streaming endpoints, Ads and compliance endpoints.
 
-## Environment variables
+## Configuration
+
+All settings are optional environment variables. Plugin installs fill them from the plugin's settings form where the host has one.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
@@ -136,28 +158,6 @@ x-api-mcp logout <username>     Remove an account and revoke its tokens
 x-api-mcp post [--account a] <text>   Publish a quick test post
 ```
 
-## Development
-
-```bash
-npm install
-npm test   # builds, then runs end-to-end tests against a local mock of the X API
-```
-
-The tests cover OAuth (loopback and paste), refresh-token rotation, the concurrency lock, threads, chunked upload, interactions, DMs, tool-group switches and the stdio protocol. Validate the plugin bundle with `claude plugin validate .`.
-
-Layout: `src/oauth.ts` (PKCE and token endpoint), `src/auth.ts` (authorization flow and loopback callback), `src/store.ts` (token file and lock), `src/client.ts` (API client with auto refresh and scope checks), `src/posts.ts` (posting), `src/social.ts` (interactions, relationships, timelines, DMs, Lists), `src/shape.ts` (response trimming), `src/media.ts`, `src/server.ts` (MCP tool registration), `src/index.ts` (entry point and CLI).
-
-## Releasing
-
-Releases are published by GitHub Actions when a version tag is pushed:
-
-```bash
-npm version patch          # or minor / major; also updates the version pinned in the plugin files
-git push --follow-tags
-```
-
-`.github/workflows/release.yml` checks that the tag matches `package.json`, runs the tests, publishes to npm with provenance and creates a GitHub release. It runs in the `npm` GitHub environment and authenticates with [npm trusted publishing](https://docs.npmjs.com/trusted-publishers) (GitHub repository `fatwang2/x-api-mcp`, workflow `release.yml`, environment `npm`), so no npm token is stored. A version that is already on npm is skipped.
-
 ## Privacy Policy
 
 x-api-mcp runs entirely on your computer. It has no server of its own and the author collects no data.
@@ -167,6 +167,45 @@ x-api-mcp runs entirely on your computer. It has no server of its own and the au
 - **Third parties:** your use of the X API is governed by the [X Developer Agreement and Policy](https://developer.x.com/en/developer-terms) and [X's Privacy Policy](https://x.com/en/privacy). Content returned by the tools is passed to the AI agent you run them in, under that agent provider's terms.
 - **Removal:** `remove_account` (or `x-api-mcp logout <username>`) revokes an account's tokens at X and deletes them locally. Deleting `~/.x-api-mcp` removes everything.
 - **Contact:** open an issue at https://github.com/fatwang2/x-api-mcp/issues.
+
+## Development
+
+This section is for contributors. To use x-api-mcp you only need [Install](#install).
+
+```bash
+git clone https://github.com/fatwang2/x-api-mcp && cd x-api-mcp
+npm install
+npm test   # builds, then runs end-to-end tests against a local mock of the X API
+```
+
+To try a local build in a client, point its MCP config at `node /absolute/path/to/x-api-mcp/dist/index.js` instead of `npx -y x-api-mcp`.
+
+The tests cover OAuth (loopback and paste), refresh-token rotation, the concurrency lock, threads, chunked upload, interactions, DMs, tool-group switches and the stdio protocol.
+
+Layout: `src/oauth.ts` (PKCE and token endpoint), `src/auth.ts` (authorization flow and loopback callback), `src/store.ts` (token file and lock), `src/client.ts` (API client with auto refresh and scope checks), `src/posts.ts` (posting), `src/social.ts` (interactions, relationships, timelines, DMs, Lists), `src/shape.ts` (response trimming), `src/media.ts`, `src/server.ts` (MCP tool registration), `src/index.ts` (entry point and CLI).
+
+### Plugin files
+
+The repository root is the plugin for every host; they share the agent skill in [`skills/x-api-mcp/SKILL.md`](skills/x-api-mcp/SKILL.md) and launch `npx -y x-api-mcp@<version>`.
+
+| File | Read by |
+| --- | --- |
+| `.claude-plugin/plugin.json`, `.mcp.json`, `.claude-plugin/marketplace.json` | Claude Code and Cowork (`userConfig` settings) |
+| `.cursor-plugin/plugin.json` (reuses `mcp.json`) | Cursor (`variables` settings) |
+| `plugin.json`, `mcp.json`, `.agents/plugins/marketplace.json` | Codex and other [Agent Plugins](https://agent-plugins.org/specification) hosts; Codex listing details live under `extensions.com.openai` |
+
+Validate the Claude plugin with `claude plugin validate .claude-plugin/plugin.json` (and the marketplace with `claude plugin validate .`). `npm version` keeps the version in all of these files in step with `package.json` (`scripts/sync-version.mjs`).
+
+### Releasing
+
+Releases are published by GitHub Actions when a version tag is pushed:
+
+```bash
+npm version patch          # or minor / major; also updates the version pinned in the plugin files
+git push --follow-tags
+```
+
+`.github/workflows/release.yml` checks that the tag matches `package.json`, runs the tests, publishes to npm with provenance and creates a GitHub release. It runs in the `npm` GitHub environment and authenticates with [npm trusted publishing](https://docs.npmjs.com/trusted-publishers) (GitHub repository `fatwang2/x-api-mcp`, workflow `release.yml`, environment `npm`), so no npm token is stored. A version that is already on npm is skipped.
 
 ## References
 
