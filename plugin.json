@@ -3,15 +3,28 @@
   "name": "x-api-mcp",
   "version": "0.2.1",
   "description": "Post, reply, thread, upload media and manage multiple X (Twitter) accounts through the official X API. Runs locally; tokens stay on your machine.",
-  "author": { "name": "fatwang2" },
-  "variables": {
-    "X_CLIENT_ID": { "description": "OAuth 2.0 Client ID of your own X App (console.x.com)", "required": false, "secret": false },
-    "X_CLIENT_SECRET": { "description": "Only for Web App (confidential) clients", "required": false, "secret": true },
-    "X_TOOLS": { "description": "all (default) or write (posting and other write tools only)", "required": false, "secret": false },
-    "X_AUTH_MODE": { "description": "auto (default), loopback, or paste (browser on another device)", "required": false, "secret": false },
-    "X_REQUIRE_ACCOUNT": { "description": "1 to refuse write calls that do not name the account", "required": false, "secret": false },
-    "X_ENABLE_DM": { "description": "1 to request DM scopes and add DM tools (App needs Direct Messages permission)", "required": false, "secret": false }
-  },
-  "mcp": "./mcp.json",
-  "skills": "./skills"
+  "author": { "name": "fatwang2", "url": "https://github.com/fatwang2" },
+  "homepage": "https://github.com/fatwang2/x-api-mcp",
+  "repository": "https://github.com/fatwang2/x-api-mcp",
+  "license": "MIT",
+  "keywords": ["x", "twitter", "social", "posting", "mcp"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "X API",
+        "shortDescription": "Post and manage multiple X accounts",
+        "longDescription": "Post, reply, publish threads, upload media, and manage likes, follows, DMs and Lists across several X (Twitter) accounts through the official X API. Runs on your computer with your own X App; tokens never leave your machine.",
+        "developerName": "fatwang2",
+        "category": "Productivity",
+        "capabilities": ["Posting", "Threads", "Media upload", "Multiple accounts", "Timelines and search"],
+        "websiteURL": "https://github.com/fatwang2/x-api-mcp",
+        "privacyPolicyURL": "https://github.com/fatwang2/x-api-mcp#privacy-policy",
+        "defaultPrompt": [
+          "Add my X account.",
+          "Draft a post about this and show it to me before posting.",
+          "Show my latest mentions."
+        ]
+      }
+    }
+  }
 }

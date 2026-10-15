@@ -15,13 +15,15 @@
     "client_id": {
       "type": "string",
       "title": "X Client ID",
-      "description": "OAuth 2.0 Client ID of your own X App (console.x.com). You can also leave this empty and set it later with the set_client_id tool."
+      "description": "OAuth 2.0 Client ID of your own X App (console.x.com). You can also leave this empty and set it later with the set_client_id tool.",
+      "default": ""
     },
     "client_secret": {
       "type": "string",
       "title": "X Client Secret",
       "description": "Only for Web App (confidential) clients. Leave empty for a Native App.",
-      "sensitive": true
+      "sensitive": true,
+      "default": ""
     },
     "tools": {
       "type": "string",
