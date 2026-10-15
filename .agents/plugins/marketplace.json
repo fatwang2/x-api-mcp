@@ -1,0 +1,12 @@
+{
+  "name": "x-api-mcp",
+  "interface": { "displayName": "X API" },
+  "plugins": [
+    {
+      "name": "x-api-mcp",
+      "source": { "source": "local", "path": "./" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

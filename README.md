@@ -33,6 +33,14 @@ The plugin bundles the MCP server and a skill that tells the agent how to use it
 
 The repository is also a Cursor plugin: [`.cursor-plugin/plugin.json`](.cursor-plugin/plugin.json) loads the same MCP server from `mcp.json` and the same skill. After installing it, set your Client ID and the other options under **Plugins** > **Configure**, or leave the Client ID empty and call `set_client_id` from chat.
 
+### As a Codex plugin
+
+```
+codex plugin marketplace add fatwang2/x-api-mcp
+```
+
+Then install **X API** from that marketplace in the Plugins Directory. Codex reads the root [`plugin.json`](plugin.json) and [`mcp.json`](mcp.json), so it runs the same local MCP server with the same skill, on your computer only (Codex CLI or the ChatGPT desktop app). Codex has no settings form for plugins, so set your Client ID once with `npx x-api-mcp config --client-id your-client-id`, or from chat with `set_client_id`.
+
 ### As a plain MCP server
 
 Claude Desktop / Cursor (`claude_desktop_config.json` / `.cursor/mcp.json`):
@@ -57,7 +65,7 @@ claude mcp add x -e X_CLIENT_ID=your-client-id -- npx -y x-api-mcp
 
 The Client ID can also be saved once with `npx x-api-mcp config --client-id your-client-id` or from chat with the `set_client_id` tool. It is stored in `~/.x-api-mcp/app.json`, and `X_CLIENT_ID` wins when both are set.
 
-The agent guidance lives in [`skills/x-api-mcp/SKILL.md`](skills/x-api-mcp/SKILL.md). The `plugin.json` and `mcp.json` at the repository root describe the same bundle for hosts that use the agent-plugins format, and `.cursor-plugin/plugin.json` reuses that `mcp.json` for Cursor.
+The agent guidance lives in [`skills/x-api-mcp/SKILL.md`](skills/x-api-mcp/SKILL.md). The `plugin.json` and `mcp.json` at the repository root describe the same bundle in the [Agent Plugins](https://agent-plugins.org/specification) format, which Codex reads (with its listing details under `extensions.com.openai`); `.cursor-plugin/plugin.json` reuses that `mcp.json` for Cursor.
 
 ## Authorize accounts
 
