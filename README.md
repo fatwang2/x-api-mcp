@@ -48,6 +48,7 @@ Each user brings their own X App, and API usage is billed to that App's credits.
 | Claude desktop app (Cowork) | [Claude plugin](#claude-desktop-app-cowork) | `set_client_id` from chat |
 | Codex CLI, ChatGPT desktop app | [Codex plugin](#codex) | `set_client_id` from chat |
 | Cursor | [Cursor plugin](#cursor) or [MCP config](#any-other-mcp-client) | Plugin settings, or `X_CLIENT_ID` |
+| Grok Bot | [Ready-made bot template](#grok-bot) | `set_client_id` from chat |
 | Claude desktop chat, Windsurf, Cline and other MCP clients | [MCP config](#any-other-mcp-client) | `X_CLIENT_ID` in the config |
 
 All plugin installs include the same MCP server plus a skill that tells the agent how to use it safely: confirm before acting, always name the account, mind the costs, and how to authorize. Everything runs locally, so plugins work only where the client runs on your computer (not in web or mobile chat).
@@ -77,6 +78,10 @@ Then install **X API** from that marketplace in the Plugins Directory (Codex CLI
 ### Cursor
 
 Install **x-api-mcp** from **Customize** once it is listed, or have a Teams/Enterprise admin import this repository as a team marketplace (**Dashboard > Plugins & MCPs > Add Marketplace > Import from Repo**). Then fill in the Client ID and options under **Configure** on the plugin. Until then, the [MCP config](#any-other-mcp-client) works in Cursor too (`.cursor/mcp.json`).
+
+### Grok Bot
+
+Open the [X API MCP template](https://x.ai/bot/_ywDVKoIufUaFJ-zZ7tVJ) and select **Add to Grok Bot**. It runs this MCP server with the same safety rules (it confirms every post with you). Then give it your Client ID, which it saves with `set_client_id`, and [add your X account](#add-x-accounts).
 
 ### Any other MCP client
 
