@@ -1,18 +1,35 @@
 {
   "name": "x-api-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local stdio MCP server for the official X API: multi-account posting, threads, media upload. Tokens never leave your machine.",
   "type": "module",
-  "bin": { "x-api-mcp": "dist/index.js" },
-  "files": ["dist", "README.md", "LICENSE"],
-  "engines": { "node": ">=20" },
+  "bin": {
+    "x-api-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
     "dev": "tsc -p tsconfig.json --watch",
-    "test": "npm run build && node --test test/*.test.mjs",
-    "start": "node dist/index.js"
+    "test": "npm run build && node --test --test-timeout=30000 test/*.test.mjs",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm test",
+    "version": "node scripts/sync-version.mjs && git add src/version.ts plugin.json .claude-plugin/plugin.json mcp.json .mcp.json"
   },
-  "keywords": ["mcp", "x", "twitter", "x-api", "oauth2", "model-context-protocol"],
+  "keywords": [
+    "mcp",
+    "x",
+    "twitter",
+    "x-api",
+    "oauth2",
+    "model-context-protocol"
+  ],
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
@@ -21,5 +38,14 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.9.3"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fatwang2/x-api-mcp.git"
+  },
+  "homepage": "https://github.com/fatwang2/x-api-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/fatwang2/x-api-mcp/issues"
+  },
+  "author": "fatwang2"
 }

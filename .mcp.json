@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "x": {
+      "command": "npx",
+      "args": ["-y", "x-api-mcp@0.2.0"],
+      "env": {
+        "X_CLIENT_ID": "${user_config.client_id}",
+        "X_CLIENT_SECRET": "${user_config.client_secret}",
+        "X_TOOLS": "${user_config.tools}",
+        "X_AUTH_MODE": "${user_config.auth_mode}",
+        "X_REQUIRE_ACCOUNT": "${user_config.require_account}",
+        "X_ENABLE_DM": "${user_config.enable_dm}"
+      }
+    }
+  }
+}
