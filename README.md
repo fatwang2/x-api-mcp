@@ -144,7 +144,7 @@ npm version patch          # or minor / major; also updates the version pinned i
 git push --follow-tags
 ```
 
-`.github/workflows/release.yml` checks that the tag matches `package.json`, runs the tests, publishes to npm with provenance and creates a GitHub release. It authenticates with [npm trusted publishing](https://docs.npmjs.com/trusted-publishers) when that is configured for this repository and `release.yml` on npmjs.com, and otherwise with an `NPM_TOKEN` repository secret.
+`.github/workflows/release.yml` checks that the tag matches `package.json`, runs the tests, publishes to npm with provenance and creates a GitHub release. It runs in the `npm` GitHub environment and authenticates with [npm trusted publishing](https://docs.npmjs.com/trusted-publishers) (GitHub repository `fatwang2/x-api-mcp`, workflow `release.yml`, environment `npm`), so no npm token is stored. A version that is already on npm is skipped.
 
 ## Privacy Policy
 

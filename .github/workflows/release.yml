@@ -13,6 +13,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: npm # add required reviewers on this environment to approve each publish
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,11 +32,15 @@ jobs:
       - run: npm ci
       - run: npm test
       - name: Publish to npm
-        # Uses npm trusted publishing when it is configured for this workflow on npmjs.com;
-        # otherwise falls back to the NPM_TOKEN secret.
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # Authenticates with npm trusted publishing (OIDC); no token is stored anywhere.
+        # Skips a version that is already on npm, e.g. the first release published by hand.
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if npm view "x-api-mcp@${version}" version >/dev/null 2>&1; then
+            echo "x-api-mcp@${version} is already published; skipping."
+          else
+            npm publish --access public --provenance
+          fi
       - name: Create GitHub release
         run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
         env:
