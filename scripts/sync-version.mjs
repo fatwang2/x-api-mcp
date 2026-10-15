@@ -8,6 +8,7 @@ const edits = [
   ["src/version.ts", /VERSION = "[^"]+"/, `VERSION = "${version}"`],
   ["plugin.json", /"version": "[^"]+"/, `"version": "${version}"`],
   [".claude-plugin/plugin.json", /"version": "[^"]+"/, `"version": "${version}"`],
+  [".cursor-plugin/plugin.json", /"version": "[^"]+"/, `"version": "${version}"`],
   ["mcp.json", /x-api-mcp@[^"]+"/, `x-api-mcp@${version}"`],
   [".mcp.json", /x-api-mcp@[^"]+"/, `x-api-mcp@${version}"`],
 ];

@@ -29,6 +29,10 @@ Each user brings their own X App, and API usage is billed to that App's credits.
 
 The plugin bundles the MCP server and a skill that tells the agent how to use it safely (confirm before acting, always name the account, mind the costs, how to authorize). It asks for your Client ID and a few options when enabled. Hosts that don't prompt for plugin settings can call `set_client_id` instead.
 
+### As a Cursor plugin
+
+The repository is also a Cursor plugin: [`.cursor-plugin/plugin.json`](.cursor-plugin/plugin.json) loads the same MCP server from `mcp.json` and the same skill. After installing it, set your Client ID and the other options under **Plugins** > **Configure**, or leave the Client ID empty and call `set_client_id` from chat.
+
 ### As a plain MCP server
 
 Claude Desktop / Cursor (`claude_desktop_config.json` / `.cursor/mcp.json`):
@@ -53,7 +57,7 @@ claude mcp add x -e X_CLIENT_ID=your-client-id -- npx -y x-api-mcp
 
 The Client ID can also be saved once with `npx x-api-mcp config --client-id your-client-id` or from chat with the `set_client_id` tool. It is stored in `~/.x-api-mcp/app.json`, and `X_CLIENT_ID` wins when both are set.
 
-The agent guidance lives in [`skills/x-api-mcp/SKILL.md`](skills/x-api-mcp/SKILL.md). The `plugin.json` and `mcp.json` at the repository root describe the same bundle for hosts that use the agent-plugins format.
+The agent guidance lives in [`skills/x-api-mcp/SKILL.md`](skills/x-api-mcp/SKILL.md). The `plugin.json` and `mcp.json` at the repository root describe the same bundle for hosts that use the agent-plugins format, and `.cursor-plugin/plugin.json` reuses that `mcp.json` for Cursor.
 
 ## Authorize accounts
 
