@@ -29,9 +29,11 @@ How it fits together:
 
 Every write is kept in a log in the Durable Object (last 1000), readable with `get_write_log`.
 
-Nothing about a particular deployment lives in the repository. Copy `wrangler.example.toml` to
-`wrangler.toml` (git ignores it), set your values there, and put `X_CLIENT_ID`,
-`X_CLIENT_SECRET` and `ALLOWED_X_USER_IDS` in with `npx wrangler secret put`.
+Nothing about a particular deployment lives in the repository. `wrangler.jsonc` is the shared
+config (and what the Deploy to Cloudflare button reads); `X_PUBLIC_BASE_URL`, `X_CLIENT_ID`,
+`X_CLIENT_SECRET` and `ALLOWED_X_USER_IDS` are secrets (`.dev.vars.example` lists them), and a
+custom domain goes in `wrangler.local.jsonc`, which git ignores. Setup steps are in the main
+README under "Remote server (self-hosted)".
 
 Checks: `npm run worker:typecheck`, `npm run worker:build` (bundles without deploying) and
 `npm run test:worker` (runs the Worker locally with `wrangler dev` against a mock X API).

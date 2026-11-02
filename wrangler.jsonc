@@ -1,0 +1,46 @@
+// Wrangler config for the remote x-api-mcp server (Cloudflare Workers). It is also what the
+// Deploy to Cloudflare button reads. Nothing that identifies a deployment belongs here: your
+// public URL, X App credentials and allowlist are secrets (see .dev.vars.example), and a custom
+// domain goes in your own copy (wrangler.local.jsonc, ignored by git). See "Remote server" in
+// the README.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "x-api-mcp",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // To serve on your own domain, add to your copy:
+  // "routes": [{ "pattern": "x-api-mcp.example.com", "custom_domain": true }],
+
+  "vars": {
+    // Which tools to offer: "all", or "read" for a read-only connector.
+    "X_TOOLS": "all",
+    // Write tools refuse a call that doesn't name the account to act as. Keep this on.
+    "X_REQUIRE_ACCOUNT": "1",
+    // Seconds a media upload waits for X to finish processing a video before handing back its media_id.
+    "X_MEDIA_WAIT_SECONDS": "20"
+  },
+
+  // Set with `npx wrangler secret put <NAME>` (the Deploy button asks for them):
+  //   X_PUBLIC_BASE_URL    public origin of this Worker, e.g. https://x-api-mcp.example.com
+  //   X_CLIENT_ID          OAuth 2.0 Client ID of a dedicated X Web App
+  //   X_CLIENT_SECRET      its Client Secret
+  //   ALLOWED_X_USER_IDS   numeric X user IDs allowed to sign in, comma separated (empty allows nobody)
+  "secrets": {
+    "required": ["X_PUBLIC_BASE_URL", "X_CLIENT_ID", "X_CLIENT_SECRET", "ALLOWED_X_USER_IDS"]
+  },
+
+  // Client registrations and grants of the connector's OAuth server.
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+
+  // X accounts, tokens, the write log and upload links.
+  "durable_objects": {
+    "bindings": [{ "name": "X_TOKEN_STORE", "class_name": "XTokenStore" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["XTokenStore"] }],
+
+  // Images and videos uploaded through create_upload_link. Let old uploads expire on their own:
+  //   npx wrangler r2 bucket lifecycle add x-api-mcp-media expire-uploads uploads/ --expire-days 7
+  "r2_buckets": [{ "binding": "X_MEDIA", "bucket_name": "x-api-mcp-media" }]
+}

@@ -7,3 +7,4 @@ pending.json
 wrangler.toml
 .wrangler/
 .dev.vars
+wrangler.local.jsonc
