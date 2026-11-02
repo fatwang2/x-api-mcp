@@ -32,8 +32,24 @@ const LOCK_STALE_MS = 30_000;
 
 export const accountKey = (name: string) => name.trim().replace(/^@/, "").toLowerCase();
 
+/**
+ * Where authorized accounts and in-flight PKCE state live. Every method is async so the
+ * same tool code can run against the local file store or a remote backend.
+ */
+export interface Store {
+  read(): Promise<StoreData>;
+  write(data: StoreData): Promise<void>;
+  readPending(): Promise<Record<string, PendingAuth>>;
+  writePending(p: Record<string, PendingAuth>): Promise<void>;
+  /**
+   * Mutual exclusion around read-modify-write of the account data. X rotates refresh tokens,
+   * so two concurrent refreshes of the same account would invalidate each other.
+   */
+  withLock<T>(fn: () => Promise<T>): Promise<T>;
+}
+
 /** File-backed token store. Files are 0600 inside a 0700 directory; writes are atomic renames. */
-export class TokenStore {
+export class FileStore implements Store {
   readonly tokensFile: string;
   readonly pendingFile: string;
   private readonly lockFile: string;
@@ -44,27 +60,24 @@ export class TokenStore {
     this.lockFile = path.join(dir, "tokens.lock");
   }
 
-  read(): StoreData {
+  async read(): Promise<StoreData> {
     const d = readJson<StoreData>(this.tokensFile);
     return d && d.accounts ? d : { version: 1, accounts: {} };
   }
 
-  write(data: StoreData): void {
+  async write(data: StoreData): Promise<void> {
     this.writeFile(this.tokensFile, data);
   }
 
-  readPending(): Record<string, PendingAuth> {
+  async readPending(): Promise<Record<string, PendingAuth>> {
     return readJson<Record<string, PendingAuth>>(this.pendingFile) ?? {};
   }
 
-  writePending(p: Record<string, PendingAuth>): void {
+  async writePending(p: Record<string, PendingAuth>): Promise<void> {
     this.writeFile(this.pendingFile, p);
   }
 
-  /**
-   * Cross-process mutex around read-modify-write of tokens.json. X rotates refresh tokens,
-   * so two MCP processes refreshing the same account at once would invalidate each other.
-   */
+  /** Cross-process mutex (lock file next to tokens.json), so several MCP processes can share one store. */
   async withLock<T>(fn: () => Promise<T>): Promise<T> {
     this.ensureDir();
     const deadline = Date.now() + 20_000;

@@ -107,11 +107,11 @@ after(() => {
 
 async function setup() {
   const { loadConfig } = await import("../dist/config.js");
-  const { TokenStore } = await import("../dist/store.js");
+  const { FileStore } = await import("../dist/store.js");
   const { XClient } = await import("../dist/client.js");
   const { AuthManager } = await import("../dist/auth.js");
   const cfg = loadConfig();
-  const client = new XClient(cfg, new TokenStore(cfg.homeDir));
+  const client = new XClient(cfg, new FileStore(cfg.homeDir));
   return { cfg, client, auth: new AuthManager(client) };
 }
 
@@ -136,13 +136,13 @@ test("multi-account OAuth via loopback, default account, file permissions", asyn
   const b = await login(auth, "bob");
   assert.equal(b.is_default, false);
   auth.close();
-  const data = client.store.read();
+  const data = await client.store.read();
   assert.deepEqual(Object.keys(data.accounts).sort(), ["alice", "bob"]);
   assert.equal(data.default_account, "alice");
   assert.equal(fs.statSync(path.join(home, "tokens.json")).mode & 0o777, 0o600);
-  assert.equal(client.resolveAccount(), "alice");
-  assert.equal(client.resolveAccount("@Bob"), "bob");
-  assert.throws(() => client.resolveAccount("carol"), /not authorized/);
+  assert.equal(await client.resolveAccount(), "alice");
+  assert.equal(await client.resolveAccount("@Bob"), "bob");
+  await assert.rejects(client.resolveAccount("carol"), /not authorized/);
 });
 
 test("post, reply thread with partial failure, delete", async () => {
@@ -167,14 +167,14 @@ test("post, reply thread with partial failure, delete", async () => {
 
 test("expired token refreshes once and rotates the refresh token", async () => {
   const { client } = await setup();
-  const d = client.store.read();
+  const d = await client.store.read();
   const oldRefresh = d.accounts.alice.refresh_token;
   d.accounts.alice.expires_at = Date.now() - 1000;
-  client.store.write(d);
+  await client.store.write(d);
   const { getMe } = await import("../dist/posts.js");
   const me = await getMe(client, "alice");
   assert.equal(me.username, "alice");
-  const after = client.store.read().accounts.alice;
+  const after = (await client.store.read()).accounts.alice;
   assert.notEqual(after.refresh_token, oldRefresh);
   assert.ok(after.expires_at > Date.now());
 
@@ -187,13 +187,49 @@ test("expired token refreshes once and rotates the refresh token", async () => {
 test("concurrent refreshes from two clients use the refresh token only once", async () => {
   const a = await setup();
   const b = await setup();
-  const d = a.client.store.read();
+  const d = await a.client.store.read();
   d.accounts.bob.expires_at = Date.now() - 1000;
-  a.client.store.write(d);
+  await a.client.store.write(d);
   const before = calls.filter((c) => c.path === "/2/oauth2/token").length;
   const [t1, t2] = await Promise.all([a.client.getAccessToken("bob"), b.client.getAccessToken("bob")]);
   assert.equal(t1, t2);
   assert.equal(calls.filter((c) => c.path === "/2/oauth2/token").length - before, 1);
+});
+
+test("XClient works against any async Store implementation", async () => {
+  const { loadConfig } = await import("../dist/config.js");
+  const { FileStore } = await import("../dist/store.js");
+  const { XClient } = await import("../dist/client.js");
+  const cfg = loadConfig();
+  const files = new FileStore(cfg.homeDir);
+  // A minimal in-memory store seeded from the file store, with a promise-chain lock.
+  let data = structuredClone(await files.read());
+  data.accounts.alice.expires_at = Date.now() - 1000;
+  let pending = {};
+  let tail = Promise.resolve();
+  const mem = {
+    read: async () => structuredClone(data),
+    write: async (d) => void (data = structuredClone(d)),
+    readPending: async () => structuredClone(pending),
+    writePending: async (p) => void (pending = structuredClone(p)),
+    withLock(fn) {
+      const run = tail.then(fn);
+      tail = run.then(() => {}, () => {});
+      return run;
+    },
+  };
+  const client = new XClient(cfg, mem);
+  assert.equal(await client.userId("alice"), "id-alice");
+  const before = calls.filter((c) => c.path === "/2/oauth2/token").length;
+  const [t1, t2] = await Promise.all([client.getAccessToken("alice"), client.getAccessToken("alice")]);
+  assert.equal(t1, t2);
+  assert.equal(calls.filter((c) => c.path === "/2/oauth2/token").length - before, 1);
+  assert.ok(data.accounts.alice.expires_at > Date.now());
+
+  // The refresh rotated alice's refresh token; hand the new one back to the file store for later tests.
+  const d = await files.read();
+  d.accounts.alice = data.accounts.alice;
+  await files.write(d);
 });
 
 test("media: simple image with alt text, chunked video with processing", async () => {
@@ -264,14 +300,14 @@ test("interactions, relationships, timelines, DMs, lists and scope checks", asyn
   assert.equal(list.result.id, "L1");
 
   // An account authorized with fewer scopes gets an actionable error before any API call.
-  const d = client.store.read();
+  const d = await client.store.read();
   d.accounts.bob.scope = "tweet.read tweet.write users.read offline.access";
-  client.store.write(d);
+  await client.store.write(d);
   const n = calls.length;
   await assert.rejects(S.postAction(client, { account: "bob", action: "like", post_id: "1" }), /without scope\(s\) like\.write.*add_account/);
   assert.equal(calls.length, n);
   d.accounts.bob.scope = SCOPES;
-  client.store.write(d);
+  await client.store.write(d);
 });
 
 async function withServer(extraEnv, fn) {

@@ -46,11 +46,11 @@ export class AuthManager {
     const clientId = requireClientId(this.cfg);
     const { verifier, challenge } = createPkce();
     const state = randomState();
-    const pending = this.store.readPending();
+    const pending = await this.store.readPending();
     const now = Date.now();
     for (const [k, v] of Object.entries(pending)) if (now - v.created > PENDING_TTL_MS) delete pending[k];
     pending[state] = { verifier, redirect_uri: this.cfg.redirectUri, client_id: clientId, created: now };
-    this.store.writePending(pending);
+    await this.store.writePending(pending);
     this.sessions.set(state, { status: "pending" });
 
     const listening = this.cfg.authMode === "loopback" && (await this.ensureListener());
@@ -123,11 +123,11 @@ export class AuthManager {
   }
 
   private async exchange(code: string, state: string): Promise<AuthResult> {
-    const pending = this.store.readPending();
+    const pending = await this.store.readPending();
     const p = pending[state];
     if (!p) throw new Error("Unknown or expired state; call add_account again.");
     delete pending[state];
-    this.store.writePending(pending);
+    await this.store.writePending(pending);
 
     const t = await exchangeCode(this.cfg, p.client_id, code, p.verifier, p.redirect_uri);
     const r = await this.client.raw(t.access_token, "GET", "/2/users/me", {
@@ -150,10 +150,10 @@ export class AuthManager {
       authorized_at: new Date().toISOString(),
     };
     const isDefault = await this.store.withLock(async () => {
-      const data = this.store.read();
+      const data = await this.store.read();
       data.accounts[key] = account;
       if (!data.default_account || !data.accounts[data.default_account]) data.default_account = key;
-      this.store.write(data);
+      await this.store.write(data);
       return data.default_account === key;
     });
     return {
@@ -167,8 +167,8 @@ export class AuthManager {
   }
 
   async remove(name: string, revoke = true): Promise<{ removed: string; revoked: boolean; revoke_error?: string }> {
-    const key = this.client.resolveAccount(name);
-    const a = this.client.getAccount(key);
+    const key = await this.client.resolveAccount(name);
+    const a = await this.client.getAccount(key);
     let revoked = false;
     let revoke_error: string | undefined;
     if (revoke) {
@@ -181,13 +181,13 @@ export class AuthManager {
       }
     }
     await this.store.withLock(async () => {
-      const data = this.store.read();
+      const data = await this.store.read();
       delete data.accounts[key];
       if (data.default_account === key) {
         const rest = Object.keys(data.accounts);
         data.default_account = rest.length === 1 ? rest[0] : undefined;
       }
-      this.store.write(data);
+      await this.store.write(data);
     });
     return { removed: a.username, revoked, ...(revoke_error ? { revoke_error } : {}) };
   }
