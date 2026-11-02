@@ -16,6 +16,8 @@ X_PUBLIC_BASE_URL = "https://x-api-mcp.example.com"
 X_TOOLS = "all"
 # Write tools refuse a call that doesn't name the account to act as. Keep this on.
 X_REQUIRE_ACCOUNT = "1"
+# Seconds a media upload waits for X to finish processing a video before handing back its media_id.
+X_MEDIA_WAIT_SECONDS = "20"
 
 # Secrets, set with `npx wrangler secret put <NAME>`, never written here:
 #   X_CLIENT_ID          OAuth 2.0 Client ID of a dedicated X Web App
@@ -33,3 +35,12 @@ class_name = "XTokenStore"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["XTokenStore"]
+
+# R2 bucket for images and videos the user uploads through create_upload_link (optional: without
+# it, media still works through media_url and small base64). Create the bucket, and let old
+# uploads expire on their own:
+#   npx wrangler r2 bucket create x-api-mcp-media
+#   npx wrangler r2 bucket lifecycle add x-api-mcp-media expire-uploads uploads/ --expire-days 7
+[[r2_buckets]]
+binding = "X_MEDIA"
+bucket_name = "x-api-mcp-media"

@@ -1,6 +1,6 @@
 import { XClient } from "./client.js";
-import { MediaCategory, uploadMedia } from "./media.js";
-import { MediaFile } from "./posts.js";
+import { uploadReady } from "./media.js";
+import { MediaFile, pickMedia } from "./posts.js";
 import { POST_QUERY, USER_QUERY, shapePosts, shapeUsers } from "./shape.js";
 import { accountKey } from "./store.js";
 
@@ -178,13 +178,6 @@ export async function getPostEngagement(
 
 // ---- direct messages --------------------------------------------------------------------
 
-function dmCategory(path: string): MediaCategory {
-  const ext = path.toLowerCase().split(".").pop();
-  if (ext === "gif") return "dm_gif";
-  if (ext === "mp4" || ext === "mov") return "dm_video";
-  return "dm_image";
-}
-
 export async function sendDm(
   client: XClient,
   a: { account?: string; to?: string; conversation_id?: string; text?: string; media_ids?: string[]; media_files?: MediaFile[] },
@@ -193,7 +186,7 @@ export async function sendDm(
   if (!a.to === !a.conversation_id) throw new Error("Pass exactly one of `to` (a user) or `conversation_id`.");
   const ids = [...(a.media_ids ?? [])];
   for (const f of a.media_files ?? []) {
-    ids.push((await uploadMedia(client, { account: key, file_path: f.file_path, alt_text: f.alt_text, media_category: dmCategory(f.file_path) })).media_id);
+    ids.push(await uploadReady(client, { ...pickMedia(f), account: key }, { dm: true }));
   }
   if (!a.text && !ids.length) throw new Error("text or media is required.");
   const body: Record<string, unknown> = {};

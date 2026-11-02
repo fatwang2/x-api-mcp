@@ -1,5 +1,6 @@
 import type { Config } from "./config-core.js";
 import { XApiError, describeError, parseBody } from "./errors.js";
+import type { MediaSources } from "./media.js";
 import { refreshToken } from "./oauth.js";
 import { Account, Store, accountKey } from "./store.js";
 
@@ -18,6 +19,8 @@ export class XClient {
   constructor(
     readonly cfg: Config,
     readonly store: Store,
+    /** Where upload_media and media_files may read media from on this server. */
+    readonly media: MediaSources = {},
   ) {}
 
   /** Resolve an account argument (or the default) to a store key. */

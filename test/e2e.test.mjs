@@ -111,7 +111,8 @@ async function setup() {
   const { XClient } = await import("../dist/client.js");
   const { AuthManager } = await import("../dist/auth.js");
   const cfg = loadConfig();
-  const client = new XClient(cfg, new FileStore(cfg.homeDir));
+  const { localMediaSources } = await import("../dist/local-media.js");
+  const client = new XClient(cfg, new FileStore(cfg.homeDir), localMediaSources());
   return { cfg, client, auth: new AuthManager(client) };
 }
 
@@ -251,6 +252,34 @@ test("media: simple image with alt text, chunked video with processing", async (
   const init = JSON.parse(calls.find((c) => c.path === "/2/media/upload/initialize").body.toString());
   assert.deepEqual(init, { media_type: "video/mp4", total_bytes: 9 * 1024 * 1024, media_category: "tweet_video" });
   assert.ok(calls.some((c) => c.method === "GET" && c.query.command === "STATUS"));
+});
+
+test("media_url only accepts public https hosts, and streams are re-cut into fixed segments", async () => {
+  const { checkMediaUrl, segments } = await import("../dist/media.js");
+  for (const ok of ["https://pbs.twimg.com/media/a.jpg", "https://8.8.8.8/x.png", "https://[2606:4700::1111]/a.png", "https://1e100.net/a.gif"]) {
+    assert.doesNotThrow(() => checkMediaUrl(ok), ok);
+  }
+  for (const bad of [
+    "http://example.com/a.png", "ftp://example.com/a", "https://user:pw@example.com/a.png", "https://example.com:8443/a.png",
+    "https://localhost/a.png", "https://127.0.0.1/a", "https://10.1.2.3/a", "https://192.168.0.1/a", "https://169.254.169.254/latest",
+    "https://172.20.0.1/a", "https://100.64.0.1/a", "https://0x7f.1/a", "https://2130706433/a", "https://[::1]/a",
+    "https://[::ffff:127.0.0.1]/a", "https://[fd00::1]/a", "https://[fe80::1]/a", "https://metadata/a", "https://printer.local/a",
+    "https://db.internal/a", "not a url",
+  ]) {
+    assert.throws(() => checkMediaUrl(bad), undefined, bad);
+  }
+
+  async function* pieces() {
+    yield new Uint8Array(3);
+    yield new Uint8Array(10);
+    yield new Uint8Array(1);
+  }
+  const sizes = [];
+  for await (const seg of segments(pieces(), 4, 100)) sizes.push(seg.length);
+  assert.deepEqual(sizes, [4, 4, 4, 2]);
+  await assert.rejects(async () => {
+    for await (const _ of segments(pieces(), 4, 10));
+  }, /larger than/);
 });
 
 test("interactions, relationships, timelines, DMs, lists and scope checks", async () => {

@@ -3,13 +3,14 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { AuthManager } from "./auth.js";
 import { XClient } from "./client.js";
 import { appFilePath, loadConfig, saveClientId } from "./config.js";
+import { localMediaSources } from "./local-media.js";
 import { createPost } from "./posts.js";
 import { createServer } from "./server.js";
 import { FileStore } from "./store.js";
 import { VERSION } from "./version.js";
 
 const cfg = loadConfig();
-const client = new XClient(cfg, new FileStore(cfg.homeDir));
+const client = new XClient(cfg, new FileStore(cfg.homeDir), localMediaSources());
 const auth = new AuthManager(client);
 
 const HELP = `x-api-mcp ${VERSION} - local stdio MCP server for the X API

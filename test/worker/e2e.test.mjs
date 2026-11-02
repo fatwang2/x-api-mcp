@@ -41,7 +41,7 @@ before(async () => {
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const body = Buffer.concat(chunks).toString();
-    calls.push({ method: req.method, path: url.pathname, headers: req.headers, body });
+    calls.push({ method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), headers: req.headers, body, bytes: Buffer.concat(chunks).length });
     const json = (code, obj) => {
       res.writeHead(code, { "content-type": "application/json" });
       res.end(JSON.stringify(obj));
@@ -69,6 +69,17 @@ before(async () => {
     const user = issued.get((req.headers.authorization || "").replace("Bearer ", ""));
     if (!user) return json(401, { title: "Unauthorized", status: 401 });
     if (url.pathname === "/2/users/me") return json(200, { data: { id: USERS[user], name: user.toUpperCase(), username: user } });
+    if (url.pathname === "/2/media/upload" && req.method === "POST") return json(200, { data: { id: `m${++seq}`, media_key: `3_m${seq}` } });
+    if (url.pathname === "/2/media/metadata") return json(200, { data: { id: "ok" } });
+    if (url.pathname === "/2/media/upload/initialize") return json(200, { data: { id: `v${++seq}` } });
+    if (/^\/2\/media\/upload\/v\d+\/append$/.test(url.pathname)) return json(200, {});
+    if (/^\/2\/media\/upload\/v\d+\/finalize$/.test(url.pathname)) {
+      const id = url.pathname.split("/")[4];
+      return json(200, { data: { id, processing_info: { state: "pending", check_after_secs: 1 } } });
+    }
+    if (url.pathname === "/2/media/upload" && req.method === "GET") {
+      return json(200, { data: { id: url.searchParams.get("media_id"), processing_info: { state: "succeeded", progress_percent: 100 } } });
+    }
     if (url.pathname === "/2/tweets" && req.method === "POST") {
       const { text } = JSON.parse(body);
       return json(201, { data: { id: `90${++seq}`, text } });
@@ -88,6 +99,7 @@ before(async () => {
     X_CLIENT_SECRET: "test-secret",
     ALLOWED_X_USER_IDS: USERS.alice,
     X_TOOLS: "all",
+    X_MEDIA_WAIT_SECONDS: "0",
   };
   wrangler = spawn(
     process.execPath,
@@ -354,4 +366,104 @@ test("add_account gives a sign-in link and the X callback adds the second accoun
   const accounts = toolJson(await mcp(accessToken, "tools/call", { name: "list_accounts", arguments: {} }));
   assert.deepEqual(accounts.accounts.map((a) => a.username).sort(), ["alice", "bob"]);
   assert.equal(accounts.default_account, "alice");
+});
+
+const MB = 1024 * 1024;
+
+async function newUploadLink() {
+  const link = toolJson(await mcp(accessToken, "tools/call", { name: "create_upload_link", arguments: {} }));
+  assert.match(link.upload_url, new RegExp(`^${base}/upload/[A-Za-z0-9_-]{40,}$`));
+  return link.upload_url;
+}
+
+const put = (url, body, type, name) =>
+  fetch(url, { method: "PUT", body, headers: { "content-type": type, ...(name ? { "x-file-name": encodeURIComponent(name) } : {}) } });
+
+test("an upload link stores one file in R2, and create_post attaches it by r2_key", async () => {
+  const url = await newUploadLink();
+  const page = await fetch(url);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("content-security-policy"), /script-src 'nonce-[^']+'/);
+  assert.match(await page.text(), /type="file"/);
+
+  assert.equal((await put(url, "<html>", "text/html")).status, 415, "wrong type is refused without using up the link");
+  assert.equal((await put(url, new Uint8Array(6 * MB), "image/png")).status, 413, "images over 5 MB are refused");
+
+  const up = await put(url, new Uint8Array(1024).fill(7), "image/png", "My Cat!.png");
+  assert.equal(up.status, 201);
+  const { r2_key } = await up.json();
+  assert.match(r2_key, /^uploads\/.+-My-Cat\.png$/);
+
+  assert.equal((await put(url, new Uint8Array(10), "image/png")).status, 410, "the link works once");
+  assert.equal((await fetch(url)).status, 410);
+
+  const listed = toolJson(await mcp(accessToken, "tools/call", { name: "list_uploads", arguments: {} }));
+  assert.equal(listed.uploads[0].r2_key, r2_key);
+  assert.equal(listed.uploads[0].bytes, 1024);
+  assert.equal(listed.uploads[0].mime_type, "image/png");
+
+  const posted = toolJson(await mcp(accessToken, "tools/call", { name: "create_post", arguments: { account: "alice", text: "pic", media_files: [{ r2_key, alt_text: "a cat" }] } }));
+  const media = calls.findLast((c) => c.path === "/2/media/upload" && c.method === "POST");
+  assert.ok(media.bytes > 1024, "the image went to X as a multipart upload");
+  const tweet = JSON.parse(calls.findLast((c) => c.path === "/2/tweets").body);
+  assert.equal(tweet.media.media_ids.length, 1);
+  assert.deepEqual(posted.media_ids, tweet.media.media_ids);
+  assert.ok(calls.some((c) => c.path === "/2/media/metadata"), "alt text was set");
+});
+
+test("videos stream to X in 4 MB segments, and posting waits for processing instead of hanging", async () => {
+  const url = await newUploadLink();
+  const up = await put(url, new Uint8Array(9 * MB).fill(1), "video/mp4", "clip.mp4");
+  assert.equal(up.status, 201);
+  const { r2_key } = await up.json();
+
+  const r = toolJson(await mcp(accessToken, "tools/call", { name: "upload_media", arguments: { account: "alice", r2_key } }));
+  assert.equal(r.method, "chunked");
+  assert.equal(r.media_category, "tweet_video");
+  assert.match(r.note, /get_media_status/);
+  const init = JSON.parse(calls.findLast((c) => c.path === "/2/media/upload/initialize").body);
+  assert.deepEqual(init, { media_type: "video/mp4", total_bytes: 9 * MB, media_category: "tweet_video" });
+  const appends = calls.filter((c) => c.path === `/2/media/upload/${r.media_id}/append`);
+  assert.equal(appends.length, 3);
+  assert.ok(appends[0].bytes > 4 * MB && appends[0].bytes < 4 * MB + 4096, "each segment is 4 MB plus form overhead");
+  assert.ok(appends[2].bytes < 1 * MB + 4096);
+
+  const tweetsBefore = calls.filter((c) => c.path === "/2/tweets").length;
+  const blocked = await mcp(accessToken, "tools/call", { name: "create_post", arguments: { account: "alice", text: "vid", media_files: [{ r2_key }] } });
+  assert.equal(blocked.isError, true);
+  assert.match(blocked.content[0].text, /still being processed/);
+  assert.equal(calls.filter((c) => c.path === "/2/tweets").length, tweetsBefore, "nothing was posted");
+
+  const status = toolJson(await mcp(accessToken, "tools/call", { name: "get_media_status", arguments: { account: "alice", media_id: r.media_id } }));
+  assert.equal(status.processing_info.state, "succeeded");
+  const posted = toolJson(await mcp(accessToken, "tools/call", { name: "create_post", arguments: { account: "alice", text: "vid", media_ids: [r.media_id] } }));
+  assert.deepEqual(posted.media_ids, [r.media_id]);
+});
+
+test("remote media sources: no file_path, https-only public media_url, small base64", async () => {
+  const tools = (await mcp(accessToken, "tools/list")).tools;
+  const upload = tools.find((t) => t.name === "upload_media").inputSchema.properties;
+  assert.ok(upload.r2_key && upload.media_url && upload.base64);
+  assert.equal(upload.file_path, undefined, "the Worker can't read local files");
+  const item = tools.find((t) => t.name === "create_post").inputSchema.properties.media_files.items.properties;
+  assert.deepEqual(Object.keys(item).sort(), ["alt_text", "media_url", "r2_key"]);
+
+  const call = (args) => mcp(accessToken, "tools/call", { name: "upload_media", arguments: { account: "alice", ...args } });
+  for (const [args, msg] of [
+    [{ media_url: "http://example.com/a.png" }, /https/],
+    [{ media_url: "https://169.254.169.254/latest/meta-data" }, /public host/],
+    [{ media_url: "https://localhost/a.png" }, /public host/],
+    [{ base64: Buffer.alloc(2.5 * MB).toString("base64"), mime_type: "image/png" }, /limited to 2 MB/],
+    [{ r2_key: "../tokens" }, /list_uploads/],
+    [{ r2_key: "uploads/missing.png" }, /No upload/],
+    [{}, /exactly one media source/],
+  ]) {
+    const r = await call(args);
+    assert.equal(r.isError, true, JSON.stringify(args).slice(0, 80));
+    assert.match(r.content[0].text, msg);
+  }
+
+  const ok = toolJson(await call({ base64: "data:image/png;base64," + Buffer.alloc(300, 9).toString("base64") }));
+  assert.equal(ok.method, "simple");
+  assert.equal(ok.bytes, 300);
 });

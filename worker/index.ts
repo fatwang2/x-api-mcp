@@ -9,6 +9,7 @@ import { XClient } from "../src/client.js";
 import { buildAuthorizeUrl, createPkce, revokeToken } from "../src/oauth.js";
 import { createServer } from "../src/server.js";
 import { finishAddAccount, isAddAccountState, webAuth } from "./add-account.js";
+import { handleUpload, uploadsFor, workerMediaSources } from "./uploads.js";
 import type { Env, GrantProps } from "./env.js";
 import { consentPage, htmlResponse, messagePage } from "./pages.js";
 import { allowedUserIds, publicBaseUrl, remoteConfig } from "./settings.js";
@@ -32,10 +33,11 @@ const mcpHandler = {
       return new Response(null, { status: 405, headers: { Allow: "POST" } });
     }
     const store = DurableStore.forEnv(env);
-    const client = new XClient(remoteConfig(env), store);
+    const client = new XClient(remoteConfig(env), store, workerMediaSources(env));
     const server = createServer(client, {
       webAuth: webAuth(client),
       writeLog: store,
+      uploads: uploadsFor(env),
       mcp: { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() },
     });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
@@ -52,6 +54,8 @@ const appHandler = {
       if (url.pathname === "/authorize" && request.method === "GET") return await showConsent(request, env);
       if (url.pathname === "/authorize" && request.method === "POST") return await startXSignIn(request, env);
       if (url.pathname === "/x/callback" && request.method === "GET") return await xCallback(request, env);
+      const upload = url.pathname.match(/^\/upload\/([A-Za-z0-9_-]{20,100})$/);
+      if (upload) return await handleUpload(request, env, upload[1]);
       if (url.pathname === "/" && request.method === "GET") {
         return new Response(`x-api-mcp remote server. Add ${publicBaseUrl(env)}/mcp as a custom connector.\n`, {
           headers: { "Content-Type": "text/plain; charset=utf-8" },
