@@ -1,7 +1,7 @@
 import { Config } from "./config.js";
 import { XApiError, describeError, parseBody } from "./errors.js";
 import { refreshToken } from "./oauth.js";
-import { Account, TokenStore, accountKey } from "./store.js";
+import { Account, Store, accountKey } from "./store.js";
 
 const REFRESH_MARGIN_MS = 120_000;
 
@@ -17,12 +17,12 @@ export interface RequestOptions {
 export class XClient {
   constructor(
     readonly cfg: Config,
-    readonly store: TokenStore,
+    readonly store: Store,
   ) {}
 
   /** Resolve an account argument (or the default) to a store key. */
-  resolveAccount(name?: string): string {
-    const data = this.store.read();
+  async resolveAccount(name?: string): Promise<string> {
+    const data = await this.store.read();
     const keys = Object.keys(data.accounts);
     if (name) {
       const k = accountKey(name);
@@ -40,18 +40,18 @@ export class XClient {
     );
   }
 
-  getAccount(key: string): Account {
-    const a = this.store.read().accounts[key];
+  async getAccount(key: string): Promise<Account> {
+    const a = (await this.store.read()).accounts[key];
     if (!a) throw new Error(`Account "${key}" not found`);
     return a;
   }
 
   async getAccessToken(key: string, force = false): Promise<string> {
-    const a = this.getAccount(key);
+    const a = await this.getAccount(key);
     if (!force && Date.now() < a.expires_at - REFRESH_MARGIN_MS) return a.access_token;
     return this.store.withLock(async () => {
       // Another process may have refreshed while we waited for the lock.
-      const data = this.store.read();
+      const data = await this.store.read();
       const cur = data.accounts[key];
       if (!cur) throw new Error(`Account "${key}" was removed`);
       if (cur.access_token !== a.access_token && Date.now() < cur.expires_at - REFRESH_MARGIN_MS) {
@@ -73,7 +73,7 @@ export class XClient {
       cur.refresh_token = t.refresh_token ?? cur.refresh_token;
       cur.expires_at = Date.now() + (t.expires_in ?? 7200) * 1000;
       if (t.scope) cur.scope = t.scope;
-      this.store.write(data);
+      await this.store.write(data);
       return cur.access_token;
     });
   }
@@ -84,8 +84,8 @@ export class XClient {
     path: string,
     opts: RequestOptions = {},
   ): Promise<T> {
-    const key = this.resolveAccount(account);
-    this.checkScopes(key, opts.scopes);
+    const key = await this.resolveAccount(account);
+    await this.checkScopes(key, opts.scopes);
     let token = await this.getAccessToken(key);
     for (let attempt = 0; ; attempt++) {
       const r = await this.raw(token, method, path, opts);
@@ -104,8 +104,8 @@ export class XClient {
     }
   }
 
-  private checkScopes(key: string, needed?: string[]) {
-    const a = this.getAccount(key);
+  private async checkScopes(key: string, needed?: string[]): Promise<void> {
+    const a = await this.getAccount(key);
     if (!needed?.length || !a.scope) return;
     const granted = new Set(a.scope.split(/\s+/));
     const missing = needed.filter((s) => !granted.has(s));
@@ -121,8 +121,8 @@ export class XClient {
   }
 
   /** User ID of a stored account (no API call). */
-  userId(account?: string): string {
-    return this.getAccount(this.resolveAccount(account)).user_id;
+  async userId(account?: string): Promise<string> {
+    return (await this.getAccount(await this.resolveAccount(account))).user_id;
   }
 
   /** Unauthenticated-by-store request with an explicit bearer token (used right after OAuth). */

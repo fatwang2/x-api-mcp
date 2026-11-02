@@ -16,7 +16,7 @@ export async function resolveUserId(client: XClient, account: string, user: stri
   const u = user.trim();
   if (/^\d{1,19}$/.test(u)) return u;
   const name = u.replace(/^@/, "");
-  const local = client.store.read().accounts[accountKey(name)];
+  const local = (await client.store.read()).accounts[accountKey(name)];
   if (local) return local.user_id;
   const j = await client.request(account, "GET", `/2/users/by/username/${enc(name)}`, { scopes: ["users.read"] });
   return j.data.id;
@@ -35,8 +35,8 @@ export type PostActionName =
   | "unhide_reply";
 
 export async function postAction(client: XClient, a: { account?: string; action: PostActionName; post_id: string }) {
-  const key = client.resolveAccount(a.account);
-  const me = client.userId(key);
+  const key = await client.resolveAccount(a.account);
+  const me = await client.userId(key);
   const id = String(a.post_id);
   const [method, path, json, scopes]: [string, string, unknown, string[]] = {
     like: ["POST", `/2/users/${me}/likes`, { tweet_id: id }, ["like.write"]],
@@ -57,8 +57,8 @@ export async function postAction(client: XClient, a: { account?: string; action:
 export type UserActionName = "follow" | "unfollow" | "mute" | "unmute" | "block" | "unblock";
 
 export async function userAction(client: XClient, a: { account?: string; action: UserActionName; user: string }) {
-  const key = client.resolveAccount(a.account);
-  const me = client.userId(key);
+  const key = await client.resolveAccount(a.account);
+  const me = await client.userId(key);
   const target = await resolveUserId(client, key, a.user);
   const coll = { follow: "following", unfollow: "following", mute: "muting", unmute: "muting", block: "blocking", unblock: "blocking" }[a.action];
   const scope = { following: "follows.write", muting: "mute.write", blocking: "block.write" }[coll]!;
@@ -73,10 +73,10 @@ export async function getUserRelations(
   client: XClient,
   a: { account?: string; type: "followers" | "following" | "muting" | "blocking"; user?: string; max_results?: number; pagination_token?: string },
 ) {
-  const key = client.resolveAccount(a.account);
+  const key = await client.resolveAccount(a.account);
   const self = a.type === "muting" || a.type === "blocking";
   if (self && a.user) throw new Error(`${a.type} can only be listed for the authorized account itself.`);
-  const uid = a.user ? await resolveUserId(client, key, a.user) : client.userId(key);
+  const uid = a.user ? await resolveUserId(client, key, a.user) : await client.userId(key);
   const scope = { followers: "follows.read", following: "follows.read", muting: "mute.read", blocking: "block.read" }[a.type];
   const j = await client.request(key, "GET", `/2/users/${uid}/${a.type}`, {
     scopes: [scope, "users.read"],
@@ -86,7 +86,7 @@ export async function getUserRelations(
 }
 
 export async function getUsers(client: XClient, a: { account?: string; usernames?: string[]; ids?: string[] }) {
-  const key = client.resolveAccount(a.account);
+  const key = await client.resolveAccount(a.account);
   if (a.usernames?.length) {
     const names = a.usernames.map((u) => u.replace(/^@/, "")).join(",");
     return shapeUsers(await client.request(key, "GET", "/2/users/by", { scopes: ["users.read"], query: { usernames: names, ...USER_QUERY } }));
@@ -98,7 +98,7 @@ export async function getUsers(client: XClient, a: { account?: string; usernames
 }
 
 export async function searchUsers(client: XClient, a: { account?: string; query: string; max_results?: number; next_token?: string }) {
-  const j = await client.request(client.resolveAccount(a.account), "GET", "/2/users/search", {
+  const j = await client.request(await client.resolveAccount(a.account), "GET", "/2/users/search", {
     scopes: ["users.read"],
     query: { query: a.query, max_results: clamp(a.max_results, 1, 1000, 10), next_token: a.next_token, ...USER_QUERY },
   });
@@ -108,7 +108,7 @@ export async function searchUsers(client: XClient, a: { account?: string; query:
 // ---- reading posts ----------------------------------------------------------------------
 
 export async function getPosts(client: XClient, a: { account?: string; ids: string[] }) {
-  const j = await client.request(client.resolveAccount(a.account), "GET", "/2/tweets", {
+  const j = await client.request(await client.resolveAccount(a.account), "GET", "/2/tweets", {
     scopes: ["tweet.read"],
     query: { ids: a.ids.join(","), ...POST_QUERY },
   });
@@ -130,10 +130,10 @@ export async function getTimeline(
     end_time?: string;
   },
 ) {
-  const key = client.resolveAccount(a.account);
+  const key = await client.resolveAccount(a.account);
   const selfOnly = a.type === "home" || a.type === "bookmarks";
   if (selfOnly && a.user) throw new Error(`The ${a.type} timeline is only available for the authorized account itself.`);
-  const uid = a.user ? await resolveUserId(client, key, a.user) : client.userId(key);
+  const uid = a.user ? await resolveUserId(client, key, a.user) : await client.userId(key);
   const [path, min, scopes] = {
     home: [`/2/users/${uid}/timelines/reverse_chronological`, 1, ["tweet.read"]],
     posts: [`/2/users/${uid}/tweets`, 5, ["tweet.read"]],
@@ -159,7 +159,7 @@ export async function getPostEngagement(
   client: XClient,
   a: { account?: string; post_id: string; type: "liking_users" | "reposted_by" | "quotes"; max_results?: number; pagination_token?: string },
 ) {
-  const key = client.resolveAccount(a.account);
+  const key = await client.resolveAccount(a.account);
   const id = enc(a.post_id);
   if (a.type === "quotes") {
     const j = await client.request(key, "GET", `/2/tweets/${id}/quote_tweets`, {
@@ -189,7 +189,7 @@ export async function sendDm(
   client: XClient,
   a: { account?: string; to?: string; conversation_id?: string; text?: string; media_ids?: string[]; media_files?: MediaFile[] },
 ) {
-  const key = client.resolveAccount(a.account);
+  const key = await client.resolveAccount(a.account);
   if (!a.to === !a.conversation_id) throw new Error("Pass exactly one of `to` (a user) or `conversation_id`.");
   const ids = [...(a.media_ids ?? [])];
   for (const f of a.media_files ?? []) {
@@ -210,7 +210,7 @@ export async function getDmEvents(
   client: XClient,
   a: { account?: string; with?: string; conversation_id?: string; max_results?: number; pagination_token?: string },
 ) {
-  const key = client.resolveAccount(a.account);
+  const key = await client.resolveAccount(a.account);
   const path = a.with
     ? `/2/dm_conversations/with/${await resolveUserId(client, key, a.with)}/dm_events`
     : a.conversation_id
@@ -245,7 +245,7 @@ export async function listAction(
   client: XClient,
   a: { account?: string; action: ListActionName; list_id?: string; name?: string; description?: string; private?: boolean; user?: string },
 ) {
-  const key = client.resolveAccount(a.account);
+  const key = await client.resolveAccount(a.account);
   const scopes = ["list.write"];
   const needList = () => {
     if (!a.list_id) throw new Error(`list_id is required for ${a.action}.`);
@@ -288,10 +288,10 @@ export async function getLists(
   client: XClient,
   a: { account?: string; type: "owned" | "info" | "members" | "posts"; list_id?: string; user?: string; max_results?: number; pagination_token?: string },
 ) {
-  const key = client.resolveAccount(a.account);
+  const key = await client.resolveAccount(a.account);
   const scopes = ["list.read"];
   if (a.type === "owned") {
-    const uid = a.user ? await resolveUserId(client, key, a.user) : client.userId(key);
+    const uid = a.user ? await resolveUserId(client, key, a.user) : await client.userId(key);
     const j = await client.request(key, "GET", `/2/users/${uid}/owned_lists`, {
       scopes,
       query: { max_results: clamp(a.max_results, 1, 100, 100), pagination_token: a.pagination_token, "list.fields": "description,member_count,follower_count,private,created_at" },
@@ -324,7 +324,7 @@ export async function getLists(
 // ---- trends -----------------------------------------------------------------------------
 
 export async function getTrends(client: XClient, a: { account?: string }) {
-  const j = await client.request(client.resolveAccount(a.account), "GET", "/2/users/personalized_trends", {
+  const j = await client.request(await client.resolveAccount(a.account), "GET", "/2/users/personalized_trends", {
     scopes: ["users.read"],
     query: { "personalized_trend.fields": "category,post_count,trend_name,trending_since" },
   });

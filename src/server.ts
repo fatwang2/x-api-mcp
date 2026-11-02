@@ -84,7 +84,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     run(async () => {
-      const data = client.store.read();
+      const data = await client.store.read();
       return {
         default_account: data.default_account ?? null,
         accounts: Object.entries(data.accounts).map(([key, a]) => ({
@@ -183,13 +183,13 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
       annotations: { openWorldHint: false, idempotentHint: true },
     },
     run(async ({ account }) => {
-      const key = client.resolveAccount(account);
+      const key = await client.resolveAccount(account);
       await client.store.withLock(async () => {
-        const data = client.store.read();
+        const data = await client.store.read();
         data.default_account = key;
-        client.store.write(data);
+        await client.store.write(data);
       });
-      return { default_account: client.getAccount(key).username };
+      return { default_account: (await client.getAccount(key)).username };
     }),
   );
 

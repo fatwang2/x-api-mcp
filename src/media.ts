@@ -77,7 +77,7 @@ export async function uploadMedia(client: XClient, input: UploadInput): Promise<
   }
   if (!bytes.length) throw new Error("Media is empty.");
 
-  const account = client.resolveAccount(input.account);
+  const account = await client.resolveAccount(input.account);
   const category = input.media_category ?? guessCategory(mime);
   const simple = (category === "tweet_image" || category === "dm_image") && bytes.length <= SIMPLE_MAX;
 
@@ -142,8 +142,8 @@ async function chunkedUpload(
   return { ...data, id: data?.id ?? id };
 }
 
-export function mediaStatus(client: XClient, account: string | undefined, mediaId: string) {
-  return client.request(client.resolveAccount(account), "GET", "/2/media/upload", {
+export async function mediaStatus(client: XClient, account: string | undefined, mediaId: string) {
+  return client.request(await client.resolveAccount(account), "GET", "/2/media/upload", {
     query: { command: "STATUS", media_id: mediaId },
   });
 }

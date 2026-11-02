@@ -5,11 +5,11 @@ import { XClient } from "./client.js";
 import { appFilePath, loadConfig, saveClientId } from "./config.js";
 import { createPost } from "./posts.js";
 import { createServer } from "./server.js";
-import { TokenStore } from "./store.js";
+import { FileStore } from "./store.js";
 import { VERSION } from "./version.js";
 
 const cfg = loadConfig();
-const client = new XClient(cfg, new TokenStore(cfg.homeDir));
+const client = new XClient(cfg, new FileStore(cfg.homeDir));
 const auth = new AuthManager(client);
 
 const HELP = `x-api-mcp ${VERSION} - local stdio MCP server for the X API
@@ -62,7 +62,7 @@ async function main(argv: string[]) {
       return;
     }
     case "accounts": {
-      const d = client.store.read();
+      const d = await client.store.read();
       for (const [k, a] of Object.entries(d.accounts)) {
         console.log(`${d.default_account === k ? "*" : " "} @${a.username}  (${a.user_id})  token until ${new Date(a.expires_at).toISOString()}`);
       }
@@ -70,13 +70,13 @@ async function main(argv: string[]) {
       return;
     }
     case "default": {
-      const key = client.resolveAccount(need(rest[0], "username"));
+      const key = await client.resolveAccount(need(rest[0], "username"));
       await client.store.withLock(async () => {
-        const d = client.store.read();
+        const d = await client.store.read();
         d.default_account = key;
-        client.store.write(d);
+        await client.store.write(d);
       });
-      console.log(`Default account: @${client.getAccount(key).username}`);
+      console.log(`Default account: @${(await client.getAccount(key)).username}`);
       return;
     }
     case "logout":

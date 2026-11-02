@@ -29,8 +29,8 @@ export interface PostResult {
 }
 
 export async function createPost(client: XClient, input: PostInput): Promise<PostResult> {
-  const key = client.resolveAccount(input.account);
-  const account = client.getAccount(key);
+  const key = await client.resolveAccount(input.account);
+  const account = await client.getAccount(key);
   const mediaIds = [...(input.media_ids ?? []).map(String)];
   for (const f of input.media_files ?? []) {
     const m = await uploadMedia(client, { account: key, file_path: f.file_path, alt_text: f.alt_text });
@@ -75,7 +75,7 @@ export interface ThreadResult {
 /** Publish posts in order, each replying to the previous one. Stops at the first failure. */
 export async function createThread(client: XClient, input: ThreadInput): Promise<ThreadResult> {
   if (!input.posts.length) throw new Error("posts must not be empty.");
-  const key = client.resolveAccount(input.account);
+  const key = await client.resolveAccount(input.account);
   const posted: PostResult[] = [];
   let parent = input.reply_to_post_id;
   for (let i = 0; i < input.posts.length; i++) {
@@ -91,14 +91,14 @@ export async function createThread(client: XClient, input: ThreadInput): Promise
 }
 
 export async function deletePost(client: XClient, account: string | undefined, postId: string) {
-  const j = await client.request(client.resolveAccount(account), "DELETE", `/2/tweets/${encodeURIComponent(postId)}`, {
+  const j = await client.request(await client.resolveAccount(account), "DELETE", `/2/tweets/${encodeURIComponent(postId)}`, {
     scopes: ["tweet.write"],
   });
   return { post_id: postId, deleted: !!j.data?.deleted };
 }
 
 export async function getMe(client: XClient, account?: string) {
-  const key = client.resolveAccount(account);
+  const key = await client.resolveAccount(account);
   const j = await client.request(key, "GET", "/2/users/me", {
     query: {
       "user.fields":
@@ -107,12 +107,12 @@ export async function getMe(client: XClient, account?: string) {
   });
   // Keep stored display info fresh.
   await client.store.withLock(async () => {
-    const data = client.store.read();
+    const data = await client.store.read();
     const a = data.accounts[key];
     if (a && j.data) {
       a.name = j.data.name;
       a.username = j.data.username;
-      client.store.write(data);
+      await client.store.write(data);
     }
   });
   return j.data;
@@ -129,7 +129,7 @@ export interface SearchInput {
 }
 
 export async function searchRecent(client: XClient, input: SearchInput) {
-  const j = await client.request(client.resolveAccount(input.account), "GET", "/2/tweets/search/recent", {
+  const j = await client.request(await client.resolveAccount(input.account), "GET", "/2/tweets/search/recent", {
     scopes: ["tweet.read", "users.read"],
     query: {
       query: input.query,
