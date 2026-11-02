@@ -1,7 +1,40 @@
 // Account bookkeeping shared by the local OAuth flow (auth.ts) and the remote Worker.
 import { XClient } from "./client.js";
-import { revokeToken } from "./oauth.js";
+import { describeError, parseBody } from "./errors.js";
+import { exchangeCode, revokeToken } from "./oauth.js";
 import { Account, Store, accountKey } from "./store.js";
+
+/**
+ * Exchange an authorization code and look up who authorized it. Returns the account record
+ * without storing it, so the caller can still decide to keep it or not.
+ */
+export async function fetchAccount(
+  client: XClient,
+  clientId: string,
+  code: string,
+  verifier: string,
+  redirectUri: string,
+): Promise<Account> {
+  const t = await exchangeCode(client.cfg, clientId, code, verifier, redirectUri);
+  const r = await client.raw(t.access_token, "GET", "/2/users/me", { query: { "user.fields": "id,name,username" } });
+  const me = await parseBody(r);
+  if (!r.ok || !me?.data?.username) {
+    throw new Error(
+      `Token obtained but GET /2/users/me failed (${r.status}: ${describeError(me)}). Check the app has users.read scope and credits.`,
+    );
+  }
+  return {
+    username: me.data.username,
+    user_id: me.data.id,
+    name: me.data.name,
+    access_token: t.access_token,
+    refresh_token: t.refresh_token,
+    expires_at: Date.now() + (t.expires_in ?? 7200) * 1000,
+    scope: t.scope,
+    client_id: clientId,
+    authorized_at: new Date().toISOString(),
+  };
+}
 
 /** Store a newly authorized account; the first one becomes the default. Returns whether it is the default. */
 export function saveAccount(store: Store, account: Account): Promise<boolean> {

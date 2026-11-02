@@ -26,6 +26,9 @@ export interface PendingAuth {
   redirect_uri: string;
   client_id: string;
   created: number;
+  /** Outcome, kept for a while by stores that can't hold it in memory (the remote Worker). */
+  done?: { username: string; user_id: string; is_default: boolean };
+  error?: string;
 }
 
 const LOCK_STALE_MS = 30_000;

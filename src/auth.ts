@@ -1,10 +1,8 @@
 import http from "node:http";
 import { XClient } from "./client.js";
 import { requireClientId } from "./config.js";
-import { describeError, parseBody } from "./errors.js";
-import { removeAccount, saveAccount } from "./accounts.js";
-import { buildAuthorizeUrl, createPkce, exchangeCode, randomState } from "./oauth.js";
-import type { Account } from "./store.js";
+import { fetchAccount, removeAccount, saveAccount } from "./accounts.js";
+import { buildAuthorizeUrl, createPkce, randomState } from "./oauth.js";
 
 const PENDING_TTL_MS = 15 * 60_000;
 
@@ -130,25 +128,7 @@ export class AuthManager {
     delete pending[state];
     await this.store.writePending(pending);
 
-    const t = await exchangeCode(this.cfg, p.client_id, code, p.verifier, p.redirect_uri);
-    const r = await this.client.raw(t.access_token, "GET", "/2/users/me", {
-      query: { "user.fields": "id,name,username" },
-    });
-    const me = await parseBody(r);
-    if (!r.ok || !me?.data?.username) {
-      throw new Error(`Token obtained but GET /2/users/me failed (${r.status}: ${describeError(me)}). Check the app has users.read scope and credits.`);
-    }
-    const account: Account = {
-      username: me.data.username,
-      user_id: me.data.id,
-      name: me.data.name,
-      access_token: t.access_token,
-      refresh_token: t.refresh_token,
-      expires_at: Date.now() + (t.expires_in ?? 7200) * 1000,
-      scope: t.scope,
-      client_id: p.client_id,
-      authorized_at: new Date().toISOString(),
-    };
+    const account = await fetchAccount(this.client, p.client_id, code, p.verifier, p.redirect_uri);
     const isDefault = await saveAccount(this.store, account);
     return {
       username: account.username,

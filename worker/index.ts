@@ -4,12 +4,11 @@
 import { OAuthProvider, AuthorizationError, CimdFetchError, authorizationErrorRedirect } from "@cloudflare/workers-oauth-provider";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { saveAccount } from "../src/accounts.js";
+import { fetchAccount, saveAccount } from "../src/accounts.js";
 import { XClient } from "../src/client.js";
-import { describeError, parseBody } from "../src/errors.js";
-import { buildAuthorizeUrl, createPkce, exchangeCode, revokeToken } from "../src/oauth.js";
+import { buildAuthorizeUrl, createPkce, revokeToken } from "../src/oauth.js";
 import { createServer } from "../src/server.js";
-import type { Account } from "../src/store.js";
+import { finishAddAccount, isAddAccountState, webAuth } from "./add-account.js";
 import type { Env, GrantProps } from "./env.js";
 import { consentPage, htmlResponse, messagePage } from "./pages.js";
 import { allowedUserIds, publicBaseUrl, remoteConfig } from "./settings.js";
@@ -32,8 +31,13 @@ const mcpHandler = {
       // No server-initiated stream and no sessions: every tool call is a single request/response.
       return new Response(null, { status: 405, headers: { Allow: "POST" } });
     }
-    const client = new XClient(remoteConfig(env), DurableStore.forEnv(env));
-    const server = createServer(client, { mcp: { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() } });
+    const store = DurableStore.forEnv(env);
+    const client = new XClient(remoteConfig(env), store);
+    const server = createServer(client, {
+      webAuth: webAuth(client),
+      writeLog: store,
+      mcp: { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() },
+    });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
     return transport.handleRequest(request);
@@ -47,7 +51,7 @@ const appHandler = {
     try {
       if (url.pathname === "/authorize" && request.method === "GET") return await showConsent(request, env);
       if (url.pathname === "/authorize" && request.method === "POST") return await startXSignIn(request, env);
-      if (url.pathname === "/x/callback" && request.method === "GET") return await finishXSignIn(request, env);
+      if (url.pathname === "/x/callback" && request.method === "GET") return await xCallback(request, env);
       if (url.pathname === "/" && request.method === "GET") {
         return new Response(`x-api-mcp remote server. Add ${publicBaseUrl(env)}/mcp as a custom connector.\n`, {
           headers: { "Content-Type": "text/plain; charset=utf-8" },
@@ -87,6 +91,25 @@ async function startXSignIn(request: Request, env: Env): Promise<Response> {
   return new Response(null, { status: 302, headers });
 }
 
+/**
+ * X sends the browser back here both for the connector sign-in (state from beginUpstream) and
+ * for add_account links (state kept in the token store).
+ */
+async function xCallback(request: Request, env: Env): Promise<Response> {
+  const params = new URL(request.url).searchParams;
+  const store = DurableStore.forEnv(env);
+  if (await isAddAccountState(store, params.get("state"))) {
+    const client = new XClient(remoteConfig(env), store);
+    try {
+      const username = await finishAddAccount(client, params.get("state")!, params.get("code"), params.get("error"));
+      return htmlResponse(messagePage("Account added", `@${username} is connected to x-api-mcp. You can close this tab.`));
+    } catch (e) {
+      return htmlResponse(messagePage("Could not add the account", (e as Error).message), 400);
+    }
+  }
+  return finishXSignIn(request, env);
+}
+
 async function finishXSignIn(request: Request, env: Env): Promise<Response> {
   const oauth = env.OAUTH_PROVIDER;
   const params = new URL(request.url).searchParams;
@@ -99,45 +122,35 @@ async function finishXSignIn(request: Request, env: Env): Promise<Response> {
 
   const cfg = remoteConfig(env);
   const store = DurableStore.forEnv(env);
-  const t = await exchangeCode(cfg, cfg.clientId!, code, data.verifier, cfg.redirectUri);
-  const r = await new XClient(cfg, store).raw(t.access_token, "GET", "/2/users/me", { query: { "user.fields": "id,name,username" } });
-  const me = await parseBody(r);
-  if (!r.ok || !me?.data?.id) {
-    return htmlResponse(messagePage("Sign-in failed", `X returned ${r.status}: ${describeError(me)}`), 502, headers);
+  const client = new XClient(cfg, store);
+  let account;
+  try {
+    account = await fetchAccount(client, cfg.clientId!, code, data.verifier, cfg.redirectUri);
+  } catch (e) {
+    return htmlResponse(messagePage("Sign-in failed", (e as Error).message), 502, headers);
   }
 
-  if (!allowedUserIds(env).has(me.data.id)) {
-    // Not on the allowlist: keep nothing and give the token back to X.
+  if (!allowedUserIds(env).has(account.user_id)) {
+    // Not on the allowlist: keep nothing and give the tokens back to X.
     try {
-      await revokeToken(cfg, cfg.clientId!, t.access_token, "access_token");
+      if (account.refresh_token) await revokeToken(cfg, cfg.clientId!, account.refresh_token, "refresh_token");
+      await revokeToken(cfg, cfg.clientId!, account.access_token, "access_token");
     } catch {
-      // Revocation is best effort; the token is not stored anywhere.
+      // Revocation is best effort; the tokens are not stored anywhere.
     }
     return htmlResponse(
-      messagePage("Not allowed", `@${me.data.username} is not on this server's allowlist, so it can't connect.`),
+      messagePage("Not allowed", `@${account.username} is not on this server's allowlist, so it can't connect.`),
       403,
       headers,
     );
   }
 
-  const account: Account = {
-    username: me.data.username,
-    user_id: me.data.id,
-    name: me.data.name,
-    access_token: t.access_token,
-    refresh_token: t.refresh_token,
-    expires_at: Date.now() + (t.expires_in ?? 7200) * 1000,
-    scope: t.scope,
-    client_id: cfg.clientId!,
-    authorized_at: new Date().toISOString(),
-  };
   await saveAccount(store, account);
-
-  const props: GrantProps = { xUserId: me.data.id, username: me.data.username };
+  const props: GrantProps = { xUserId: account.user_id, username: account.username };
   const { redirectTo } = await oauth.completeAuthorization({
     request: original,
-    userId: me.data.id,
-    metadata: { username: me.data.username },
+    userId: account.user_id,
+    metadata: { username: account.username },
     scope: original.scope,
     props,
   });

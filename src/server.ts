@@ -53,6 +53,40 @@ const run =
 
 type Group = "account" | "read" | "write" | "dm-read" | "dm-write";
 
+/** Rules for the model, sent to every client as the server's instructions (and in the plugin's skill). */
+export const SERVER_INSTRUCTIONS = [
+  "These tools act on real X accounts and every API call is billed to the user's own X App.",
+  "Before anything visible to others (create_post, create_thread, send_dm, delete_post, post_action, user_action, list_action), " +
+    "show the user the account, the exact text or the action and its target, and wait for an explicit yes. " +
+    "One confirmation covers only the action it describes; ask again if the text, account or target changes.",
+  "Never post, message, follow, like or repost on your own initiative, and never do any of these in bulk or in loops.",
+  "Always pass `account` on calls that write, even with one account authorized; call list_accounts (free) when unsure and ask which to use.",
+  "Mention the cost before posting anything with a link (about $0.20 per post) or long threads. Keep max_results small on reads.",
+].join("\n");
+
+const CONFIRMED = " Only call after the user confirmed the account and this exact action.";
+
+export interface WriteLogEntry {
+  at: string;
+  tool: string;
+  account?: string;
+  /** Post, user, list or media IDs and the action involved, when the call names or returns them. */
+  [detail: string]: unknown;
+}
+
+/** Record of every write the server performed, kept where the deployment can store it. */
+export interface WriteLog {
+  append(entry: WriteLogEntry): Promise<void>;
+  /** Newest first. */
+  list(limit: number): Promise<WriteLogEntry[]>;
+}
+
+/** Adding accounts from a remote server: add_account returns a sign-in link the server finishes itself. */
+export interface WebAuth {
+  start(): Promise<{ authorize_url: string; state: string; note: string }>;
+  status(state: string): Promise<unknown>;
+}
+
 export interface ServerOptions {
   /**
    * Account setup that only works on the user's own machine: the local OAuth flow (add_account,
@@ -63,13 +97,53 @@ export interface ServerOptions {
     auth: AuthManager;
     saveClientId(clientId: string, clientSecret?: string): void;
   };
-  /** Extra options for the underlying MCP server (instructions, JSON schema validator). */
+  /** Remote account setup: add_account and auth_status backed by the server's own callback. */
+  webAuth?: WebAuth;
+  /** When set, every successful write is recorded and get_write_log can read it back. */
+  writeLog?: WriteLog;
+  /** Extra options for the underlying MCP server (e.g. a JSON schema validator). */
   mcp?: ConstructorParameters<typeof McpServer>[1];
 }
 
 export function createServer(client: XClient, opts: ServerOptions = {}): McpServer {
-  const server = new McpServer({ name: "x-api-mcp", version: VERSION }, opts.mcp);
+  const server = new McpServer(
+    { name: "x-api-mcp", version: VERSION },
+    { instructions: SERVER_INSTRUCTIONS, ...opts.mcp },
+  );
   const cfg = client.cfg;
+
+  /** Wrap a write tool so each call that did something is appended to the write log. */
+  const logged =
+    (tool: string, cb: (a: any) => any, log: WriteLog) =>
+    async (a: any) => {
+      const res = await cb(a);
+      let data: any;
+      try {
+        data = JSON.parse(res?.content?.[0]?.text ?? "null");
+      } catch {
+        data = undefined;
+      }
+      if (res?.isError && !data?.posted?.length) return res;
+      const ids = [data?.id, data?.post_id, ...(data?.posted ?? []).map((p: any) => p?.id)].filter(Boolean);
+      const entry: WriteLogEntry = {
+        at: new Date().toISOString(),
+        tool,
+        account: a?.account ?? (await client.resolveAccount().catch(() => undefined)),
+        ...(a?.action ? { action: a.action } : {}),
+        ...(a?.post_id ? { post_id: a.post_id } : {}),
+        ...(a?.user ? { user: a.user } : {}),
+        ...(a?.to ? { to: a.to } : {}),
+        ...(a?.list_id ? { list_id: a.list_id } : {}),
+        ...(ids.length ? { result_ids: [...new Set(ids.map(String))] } : {}),
+        ...(res?.isError ? { partial: true } : {}),
+      };
+      try {
+        await log.append(entry);
+      } catch {
+        // The write already happened; a failed log append must not turn it into an error.
+      }
+      return res;
+    };
 
   /**
    * Register a tool unless config turns its group off: X_TOOLS picks read and/or write tools,
@@ -86,6 +160,11 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
           ? cb(a)
           : fail(new Error(`"account" is required for ${name} (X_REQUIRE_ACCOUNT is on). Call list_accounts and pass the username to act as.`));
       config = { ...config, inputSchema: { ...config.inputSchema, account: z.string().describe("X username of the authorized account to act as (required)") } };
+    }
+    const writes = kind === "write" && !config.annotations?.readOnlyHint;
+    if (writes) {
+      config = { ...config, annotations: { readOnlyHint: false, ...config.annotations } };
+      if (opts.writeLog) handler = logged(name, handler, opts.writeLog);
     }
     server.registerTool(name, config, handler);
   };
@@ -195,6 +274,44 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
     );
   }
 
+  if (!local && opts.webAuth) {
+    const web = opts.webAuth;
+
+    register("account", "add_account",
+      {
+        description:
+          "Authorize another X account on this server. Returns authorize_url for the user to open in any browser " +
+          "signed in to that account; after they click Authorize, the server saves the account by itself. Then confirm " +
+          "with auth_status or list_accounts. The link works once and expires after 15 minutes.",
+        annotations: { openWorldHint: true },
+      },
+      run(() => web.start()),
+    );
+
+    register("account", "auth_status",
+      {
+        description: "Check whether an authorization started with add_account has finished.",
+        inputSchema: { state: z.string().describe("state returned by add_account") },
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      run(({ state }) => web.status(state)),
+    );
+  }
+
+  if (opts.writeLog) {
+    const log = opts.writeLog;
+    register("account", "get_write_log",
+      {
+        description:
+          "List the most recent writes made through this server (posts, threads, deletes, likes, follows, DMs, list changes), " +
+          "newest first, with the account and post IDs. No API cost.",
+        inputSchema: { limit: z.number().int().min(1).max(200).optional().describe("How many entries (default 20)") },
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      run(async ({ limit }) => ({ entries: await log.list(limit ?? 20) })),
+    );
+  }
+
   register("account", "set_default_account",
     {
       description: "Choose which authorized account is used when a tool call omits `account`.",
@@ -258,7 +375,7 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
         made_with_ai: z.boolean().optional().describe("Disclose AI-generated media"),
         paid_partnership: z.boolean().optional().describe("Disclose a paid partnership"),
       },
-      annotations: { openWorldHint: true },
+      annotations: { destructiveHint: false, openWorldHint: true },
     },
     run((a) => createPost(client, a)),
   );
@@ -267,7 +384,7 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
     {
       description:
         "Publish a thread: each post replies to the previous one. Stops at the first failure and reports what was posted. " +
-        "Each post is billed like create_post.",
+        "Each post is billed like create_post. Only call when the user has confirmed the exact text of every post and the account.",
       inputSchema: {
         account,
         posts: z
@@ -276,7 +393,7 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
           .max(25),
         reply_to_post_id: z.string().optional().describe("Attach the thread under an existing post"),
       },
-      annotations: { openWorldHint: true },
+      annotations: { destructiveHint: false, openWorldHint: true },
     },
     async (a) => {
       try {
@@ -290,7 +407,7 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
 
   register("write", "delete_post",
     {
-      description: "Delete a post owned by the given account (billed per request).",
+      description: "Delete a post owned by the given account (billed per request)." + CONFIRMED,
       inputSchema: { account, post_id: z.string() },
       annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
@@ -301,13 +418,13 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
     {
       description:
         "Interact with a post as the given account: like, unlike, repost, unrepost, bookmark, unbookmark, " +
-        "hide_reply or unhide_reply (replies to your own posts).",
+        "hide_reply or unhide_reply (replies to your own posts)." + CONFIRMED,
       inputSchema: {
         account,
         action: z.enum(["like", "unlike", "repost", "unrepost", "bookmark", "unbookmark", "hide_reply", "unhide_reply"]),
         post_id: z.string(),
       },
-      annotations: { openWorldHint: true, idempotentHint: true },
+      annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     run((a) => postAction(client, a)),
   );
@@ -330,7 +447,7 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
           .describe("Inferred from the file type for posts; use dm_* for direct messages"),
         alt_text: z.string().max(1000).optional(),
       },
-      annotations: { openWorldHint: true },
+      annotations: { destructiveHint: false, openWorldHint: true },
     },
     run((a) => uploadMedia(client, a)),
   );
@@ -438,9 +555,9 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
     {
       description:
         "Follow, unfollow, mute, unmute, block or unblock a user as the given account. " +
-        "X documents block as Enterprise-only, so it may be refused on pay-per-use apps.",
+        "X documents block as Enterprise-only, so it may be refused on pay-per-use apps." + CONFIRMED,
       inputSchema: { account, action: z.enum(["follow", "unfollow", "mute", "unmute", "block", "unblock"]), user },
-      annotations: { openWorldHint: true, idempotentHint: true },
+      annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     run((a) => userAction(client, a)),
   );
@@ -460,7 +577,7 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
         media_ids: z.array(z.string()).max(1).optional().describe("A media_id uploaded with a dm_* media_category"),
         media_files: mediaFiles,
       },
-      annotations: { openWorldHint: true },
+      annotations: { destructiveHint: false, openWorldHint: true },
     },
     run((a) => sendDm(client, a)),
   );
@@ -478,7 +595,7 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
 
   register("write", "list_action",
     {
-      description: "Manage X Lists: create, update, delete, add_member, remove_member.",
+      description: "Manage X Lists: create, update, delete, add_member, remove_member." + CONFIRMED,
       inputSchema: {
         account,
         action: z.enum(["create", "update", "delete", "add_member", "remove_member"]),
@@ -488,7 +605,7 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
         private: z.boolean().optional(),
         user: user.optional().describe("Member for add_member / remove_member"),
       },
-      annotations: { openWorldHint: true },
+      annotations: { destructiveHint: true, openWorldHint: true },
     },
     run((a) => listAction(client, a)),
   );

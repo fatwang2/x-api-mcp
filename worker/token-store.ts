@@ -1,9 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
+import type { WriteLog, WriteLogEntry } from "../src/server.js";
 import type { PendingAuth, Store, StoreData } from "../src/store.js";
 import type { Env } from "./env.js";
 
 const LEASE_MS = 30_000;
 const WAIT_MS = 20_000;
+const LOG_LIMIT = 1000;
 
 /**
  * One instance per deployment (idFromName("owner")) keeps every X account and its tokens.
@@ -31,6 +33,17 @@ export class XTokenStore extends DurableObject<Env> {
     await this.ctx.storage.put("pending", p);
   }
 
+  async appendLog(entry: WriteLogEntry): Promise<void> {
+    const log = (await this.ctx.storage.get<WriteLogEntry[]>("write_log")) ?? [];
+    log.push(entry);
+    await this.ctx.storage.put("write_log", log.slice(-LOG_LIMIT));
+  }
+
+  async listLog(limit: number): Promise<WriteLogEntry[]> {
+    const log = (await this.ctx.storage.get<WriteLogEntry[]>("write_log")) ?? [];
+    return log.slice(-limit).reverse();
+  }
+
   async acquire(): Promise<string> {
     const deadline = Date.now() + WAIT_MS;
     while (this.lease && this.lease.until > Date.now()) {
@@ -47,8 +60,8 @@ export class XTokenStore extends DurableObject<Env> {
   }
 }
 
-/** Store backed by the XTokenStore Durable Object, for use inside the Worker. */
-export class DurableStore implements Store {
+/** Store (and write log) backed by the XTokenStore Durable Object, for use inside the Worker. */
+export class DurableStore implements Store, WriteLog {
   constructor(private readonly stub: DurableObjectStub<XTokenStore>) {}
 
   static forEnv(env: Env): DurableStore {
@@ -69,6 +82,14 @@ export class DurableStore implements Store {
 
   async writePending(p: Record<string, PendingAuth>): Promise<void> {
     await this.stub.writePending(p);
+  }
+
+  async append(entry: WriteLogEntry): Promise<void> {
+    await this.stub.appendLog(entry);
+  }
+
+  async list(limit: number): Promise<WriteLogEntry[]> {
+    return (await this.stub.listLog(limit)) as WriteLogEntry[];
   }
 
   async withLock<T>(fn: () => Promise<T>): Promise<T> {

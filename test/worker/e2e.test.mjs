@@ -20,16 +20,17 @@ let mock;
 let wrangler;
 let base;
 
-const USERS = { alice: "1001", mallory: "666" };
+const USERS = { alice: "1001", bob: "2002", mallory: "666" };
 // alice's tokens are always "about to expire", so every tool call refreshes and rotates them.
-const EXPIRES = { alice: 60, mallory: 7200 };
+const EXPIRES = { alice: 60, bob: 7200, mallory: 7200 };
+const SCOPE = "tweet.read tweet.write users.read follows.read follows.write like.read like.write offline.access media.write";
 
 function issue(res, user) {
   const n = ++seq;
   issued.set(`at-${n}`, user);
   validRefresh.set(`rt-${n}`, user);
   res.writeHead(200, { "content-type": "application/json" });
-  res.end(JSON.stringify({ token_type: "bearer", access_token: `at-${n}`, refresh_token: `rt-${n}`, expires_in: EXPIRES[user], scope: "tweet.read users.read offline.access" }));
+  res.end(JSON.stringify({ token_type: "bearer", access_token: `at-${n}`, refresh_token: `rt-${n}`, expires_in: EXPIRES[user], scope: SCOPE }));
 }
 
 const b64url = (b) => b.toString("base64url");
@@ -68,6 +69,10 @@ before(async () => {
     const user = issued.get((req.headers.authorization || "").replace("Bearer ", ""));
     if (!user) return json(401, { title: "Unauthorized", status: 401 });
     if (url.pathname === "/2/users/me") return json(200, { data: { id: USERS[user], name: user.toUpperCase(), username: user } });
+    if (url.pathname === "/2/tweets" && req.method === "POST") {
+      const { text } = JSON.parse(body);
+      return json(201, { data: { id: `90${++seq}`, text } });
+    }
     if (url.pathname === "/2/tweets/search/recent") return json(200, { data: [{ id: "1", text: "hi", author_id: USERS.alice }], includes: { users: [{ id: USERS.alice, username: "alice" }] }, meta: { result_count: 1 } });
     json(404, { detail: "not mocked " + url.pathname });
   });
@@ -82,7 +87,7 @@ before(async () => {
     X_CLIENT_ID: "test-client",
     X_CLIENT_SECRET: "test-secret",
     ALLOWED_X_USER_IDS: USERS.alice,
-    X_TOOLS: "read",
+    X_TOOLS: "all",
   };
   wrangler = spawn(
     process.execPath,
@@ -246,13 +251,14 @@ test("allowlisted X account signs in, gets stored, and can use read tools", asyn
 
   const init = await mcp(accessToken, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
   assert.equal(init.serverInfo.name, "x-api-mcp");
+  assert.match(init.instructions, /confirm/i, "the server tells the model to confirm visible actions");
 
   const names = (await mcp(accessToken, "tools/list")).tools.map((t) => t.name);
   assert.ok(names.includes("get_me"));
   assert.ok(names.includes("search"));
   assert.ok(names.includes("list_accounts"));
-  for (const local of ["set_client_id", "add_account", "auth_status", "complete_authorization"]) assert.ok(!names.includes(local), local);
-  assert.ok(!names.includes("create_post"), "X_TOOLS=read leaves out write tools");
+  for (const local of ["set_client_id", "complete_authorization"]) assert.ok(!names.includes(local), local);
+  for (const remote of ["create_post", "add_account", "auth_status", "get_write_log"]) assert.ok(names.includes(remote), remote);
 
   const accounts = toolJson(await mcp(accessToken, "tools/call", { name: "list_accounts", arguments: {} }));
   assert.equal(accounts.default_account, "alice");
@@ -298,4 +304,54 @@ test("the consent form can't be submitted from another browser", async () => {
   });
   assert.equal(r.status, 400);
   assert.equal(r.headers.get("location"), null);
+});
+
+test("write tools carry annotations, need an explicit account, and land in the write log", async () => {
+  const tools = (await mcp(accessToken, "tools/list")).tools;
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  assert.equal(byName.create_post.annotations.readOnlyHint, false);
+  assert.equal(byName.create_post.annotations.destructiveHint, false);
+  assert.equal(byName.delete_post.annotations.destructiveHint, true);
+  assert.match(byName.delete_post.description, /confirm/i);
+  assert.ok(byName.create_post.inputSchema.required.includes("account"), "X_REQUIRE_ACCOUNT defaults on");
+
+  const missing = await mcp(accessToken, "tools/call", { name: "create_post", arguments: { text: "no account" } });
+  assert.equal(missing.isError, true);
+  assert.ok(!calls.some((c) => c.path === "/2/tweets" && c.body.includes("no account")), "nothing was posted");
+
+  const posted = toolJson(await mcp(accessToken, "tools/call", { name: "create_post", arguments: { account: "alice", text: "hello from the worker" } }));
+  assert.ok(posted.id);
+
+  const log = toolJson(await mcp(accessToken, "tools/call", { name: "get_write_log", arguments: {} }));
+  const entries = log.entries ?? log;
+  assert.equal(entries[0].tool, "create_post");
+  assert.equal(entries[0].account, "alice");
+  assert.deepEqual(entries[0].result_ids, [posted.id]);
+  assert.equal(entries.length, 1, "the refused call was not logged as a write");
+});
+
+test("add_account gives a sign-in link and the X callback adds the second account", async () => {
+  const started = toolJson(await mcp(accessToken, "tools/call", { name: "add_account", arguments: {} }));
+  const link = new URL(started.authorize_url);
+  assert.equal(link.origin + link.pathname, "https://x.com/i/oauth2/authorize");
+  assert.equal(link.searchParams.get("redirect_uri"), `${base}/x/callback`);
+  assert.equal(link.searchParams.get("state"), started.state);
+  assert.equal(toolJson(await mcp(accessToken, "tools/call", { name: "auth_status", arguments: { state: started.state } })).status, "pending");
+
+  // bob is not on the allowlist, but the signed-in owner may still add him as an account to act as.
+  const cb = await fetch(`${base}/x/callback?state=${encodeURIComponent(started.state)}&code=code-bob`, { redirect: "manual" });
+  assert.equal(cb.status, 200);
+  assert.match(await cb.text(), /@bob is connected/);
+
+  const status = toolJson(await mcp(accessToken, "tools/call", { name: "auth_status", arguments: { state: started.state } }));
+  assert.equal(status.status, "done");
+  assert.equal(status.result.username, "bob");
+  assert.equal(status.result.is_default, false);
+
+  const replay = await fetch(`${base}/x/callback?state=${encodeURIComponent(started.state)}&code=code-bob`, { redirect: "manual" });
+  assert.notEqual(replay.status, 200, "a used add_account link can't be replayed");
+
+  const accounts = toolJson(await mcp(accessToken, "tools/call", { name: "list_accounts", arguments: {} }));
+  assert.deepEqual(accounts.accounts.map((a) => a.username).sort(), ["alice", "bob"]);
+  assert.equal(accounts.default_account, "alice");
 });
