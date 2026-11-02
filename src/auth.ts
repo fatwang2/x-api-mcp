@@ -2,8 +2,9 @@ import http from "node:http";
 import { XClient } from "./client.js";
 import { requireClientId } from "./config.js";
 import { describeError, parseBody } from "./errors.js";
-import { buildAuthorizeUrl, createPkce, exchangeCode, randomState, revokeToken } from "./oauth.js";
-import { Account, accountKey } from "./store.js";
+import { removeAccount, saveAccount } from "./accounts.js";
+import { buildAuthorizeUrl, createPkce, exchangeCode, randomState } from "./oauth.js";
+import type { Account } from "./store.js";
 
 const PENDING_TTL_MS = 15 * 60_000;
 
@@ -137,7 +138,6 @@ export class AuthManager {
     if (!r.ok || !me?.data?.username) {
       throw new Error(`Token obtained but GET /2/users/me failed (${r.status}: ${describeError(me)}). Check the app has users.read scope and credits.`);
     }
-    const key = accountKey(me.data.username);
     const account: Account = {
       username: me.data.username,
       user_id: me.data.id,
@@ -149,13 +149,7 @@ export class AuthManager {
       client_id: p.client_id,
       authorized_at: new Date().toISOString(),
     };
-    const isDefault = await this.store.withLock(async () => {
-      const data = await this.store.read();
-      data.accounts[key] = account;
-      if (!data.default_account || !data.accounts[data.default_account]) data.default_account = key;
-      await this.store.write(data);
-      return data.default_account === key;
-    });
+    const isDefault = await saveAccount(this.store, account);
     return {
       username: account.username,
       user_id: account.user_id,
@@ -166,30 +160,8 @@ export class AuthManager {
     };
   }
 
-  async remove(name: string, revoke = true): Promise<{ removed: string; revoked: boolean; revoke_error?: string }> {
-    const key = await this.client.resolveAccount(name);
-    const a = await this.client.getAccount(key);
-    let revoked = false;
-    let revoke_error: string | undefined;
-    if (revoke) {
-      try {
-        if (a.refresh_token) await revokeToken(this.cfg, a.client_id, a.refresh_token, "refresh_token");
-        await revokeToken(this.cfg, a.client_id, a.access_token, "access_token");
-        revoked = true;
-      } catch (e) {
-        revoke_error = (e as Error).message;
-      }
-    }
-    await this.store.withLock(async () => {
-      const data = await this.store.read();
-      delete data.accounts[key];
-      if (data.default_account === key) {
-        const rest = Object.keys(data.accounts);
-        data.default_account = rest.length === 1 ? rest[0] : undefined;
-      }
-      await this.store.write(data);
-    });
-    return { removed: a.username, revoked, ...(revoke_error ? { revoke_error } : {}) };
+  remove(name: string, revoke = true) {
+    return removeAccount(this.client, name, revoke);
   }
 
   private ensureListener(): Promise<boolean> {
