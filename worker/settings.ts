@@ -19,6 +19,8 @@ export function remoteConfig(env: Env): Config {
     ...(env as unknown as Record<string, string | undefined>),
     X_REDIRECT_URI: `${publicBaseUrl(env)}/x/callback`,
     X_AUTH_MODE: "paste",
+    // Several accounts behind one connector: writes must always name theirs unless turned off.
+    X_REQUIRE_ACCOUNT: env.X_REQUIRE_ACCOUNT ?? "1",
   });
   if (!cfg.clientId || !cfg.clientSecret) {
     throw new Error("X_CLIENT_ID and X_CLIENT_SECRET must be set as Worker secrets (wrangler secret put).");

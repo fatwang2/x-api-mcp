@@ -12,8 +12,9 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 # Public origin of the Worker. X calls back to <origin>/x/callback, and the connector URL is <origin>/mcp.
 X_PUBLIC_BASE_URL = "https://x-api-mcp.example.com"
-# Start with read-only tools. Write tools come with the guardrails in a later release.
-X_TOOLS = "read"
+# Which tools to offer: "all", or "read" for a read-only connector.
+X_TOOLS = "all"
+# Write tools refuse a call that doesn't name the account to act as. Keep this on.
 X_REQUIRE_ACCOUNT = "1"
 
 # Secrets, set with `npx wrangler secret put <NAME>`, never written here:
