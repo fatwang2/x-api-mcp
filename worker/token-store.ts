@@ -7,6 +7,11 @@ const LEASE_MS = 30_000;
 const WAIT_MS = 20_000;
 const LOG_LIMIT = 1000;
 
+interface UploadToken {
+  expires: number;
+  state: "open" | "uploading" | "used";
+}
+
 /**
  * One instance per deployment (idFromName("owner")) keeps every X account and its tokens.
  * Besides plain reads and writes it hands out a lease lock, the same contract as the local
@@ -42,6 +47,43 @@ export class XTokenStore extends DurableObject<Env> {
   async listLog(limit: number): Promise<WriteLogEntry[]> {
     const log = (await this.ctx.storage.get<WriteLogEntry[]>("write_log")) ?? [];
     return log.slice(-limit).reverse();
+  }
+
+  /** One-time upload links: only a hash of each token is kept, with its expiry and state. */
+  private async uploadTokens(): Promise<Record<string, UploadToken>> {
+    const all = (await this.ctx.storage.get<Record<string, UploadToken>>("upload_tokens")) ?? {};
+    const now = Date.now();
+    for (const [h, t] of Object.entries(all)) if (t.expires < now - 3_600_000) delete all[h];
+    return all;
+  }
+
+  async addUploadToken(hash: string, expires: number): Promise<void> {
+    const all = await this.uploadTokens();
+    all[hash] = { expires, state: "open" };
+    await this.ctx.storage.put("upload_tokens", all);
+  }
+
+  async peekUploadToken(hash: string): Promise<"open" | "gone"> {
+    const t = (await this.uploadTokens())[hash];
+    return t && t.state === "open" && t.expires > Date.now() ? "open" : "gone";
+  }
+
+  /** Take an open token for one upload. Runs as one step in the object, so two uploads can't both claim it. */
+  async claimUploadToken(hash: string): Promise<"claimed" | "gone"> {
+    const all = await this.uploadTokens();
+    const t = all[hash];
+    if (!t || t.state !== "open" || t.expires <= Date.now()) return "gone";
+    all[hash] = { ...t, state: "uploading" };
+    await this.ctx.storage.put("upload_tokens", all);
+    return "claimed";
+  }
+
+  /** Mark a claimed token used, or open it again if the upload failed. */
+  async finishUploadToken(hash: string, ok: boolean): Promise<void> {
+    const all = await this.uploadTokens();
+    if (!all[hash]) return;
+    all[hash] = { ...all[hash], state: ok ? "used" : "open" };
+    await this.ctx.storage.put("upload_tokens", all);
   }
 
   async acquire(): Promise<string> {

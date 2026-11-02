@@ -12,6 +12,8 @@ export interface Env {
   OAUTH_PROVIDER: OAuthHelpers;
   /** Durable Object holding the X accounts and their tokens. */
   X_TOKEN_STORE: DurableObjectNamespace<XTokenStore>;
+  /** Optional R2 bucket for media uploaded through create_upload_link. */
+  X_MEDIA?: R2Bucket;
 
   /** Public origin of this Worker, e.g. https://x-api-mcp.example.com (no trailing path). */
   X_PUBLIC_BASE_URL?: string;
@@ -27,6 +29,8 @@ export interface Env {
   X_ENABLE_DM?: string;
   X_SCOPES?: string;
   X_DEFAULT_ACCOUNT?: string;
+  /** Seconds to wait for X to process a video before returning its media_id (default 20). */
+  X_MEDIA_WAIT_SECONDS?: string;
   /** Overrides for tests against a mock X API. */
   X_API_BASE?: string;
   X_AUTHORIZE_URL?: string;

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { removeAccount } from "./accounts.js";
 import type { AuthManager } from "./auth.js";
 import { XClient } from "./client.js";
-import { mediaStatus, uploadMedia } from "./media.js";
+import { type MediaSources, mediaStatus, offeredSources, uploadMedia } from "./media.js";
 import { createPost, createThread, deletePost, getMe, searchRecent } from "./posts.js";
 import {
   getDmEvents,
@@ -27,11 +27,27 @@ const account = z
   .optional()
   .describe("X username of an authorized account (see list_accounts). Omit to use the default account.");
 
-const mediaFiles = z
-  .array(z.object({ file_path: z.string().describe("Absolute path to a local image/GIF/video"), alt_text: z.string().max(1000).optional() }))
-  .max(4)
-  .optional()
-  .describe("Local files to upload and attach in one step (max 4 images, or 1 GIF/video).");
+/** The media source fields this server offers (file_path locally; r2_key and media_url on the Worker). */
+function mediaSourceFields(src: MediaSources) {
+  return {
+    ...(src.readFile ? { file_path: z.string().optional().describe("Absolute path to a local image/GIF/video") } : {}),
+    ...(src.readR2 ? { r2_key: z.string().optional().describe("Key of a file uploaded through create_upload_link (see list_uploads)") } : {}),
+    ...(src.urls ? { media_url: z.string().optional().describe("Public https URL of an image/GIF/video to fetch and upload") } : {}),
+  };
+}
+
+function mediaFilesSchema(src: MediaSources) {
+  const fields = mediaSourceFields(src);
+  return z
+    .array(z.object({ ...fields, alt_text: z.string().max(1000).optional() }))
+    .max(4)
+    .optional()
+    .describe(
+      `Media to upload and attach in one step, each item with one of ${Object.keys(fields).join(", ")} ` +
+        "(max 4 images, or 1 GIF/video). A video that X is still processing makes the call fail with its media_id; " +
+        "check get_media_status, then post with media_ids.",
+    );
+}
 
 const mediaIds = z.array(z.string()).max(4).optional().describe("media_id values returned by upload_media");
 
@@ -87,6 +103,12 @@ export interface WebAuth {
   status(state: string): Promise<unknown>;
 }
 
+/** One-time browser upload links and the files they produced (R2 on the Worker). */
+export interface Uploads {
+  createLink(): Promise<unknown>;
+  list(limit: number): Promise<unknown>;
+}
+
 export interface ServerOptions {
   /**
    * Account setup that only works on the user's own machine: the local OAuth flow (add_account,
@@ -101,6 +123,8 @@ export interface ServerOptions {
   webAuth?: WebAuth;
   /** When set, every successful write is recorded and get_write_log can read it back. */
   writeLog?: WriteLog;
+  /** Browser uploads into the server's own storage (create_upload_link, list_uploads). */
+  uploads?: Uploads;
   /** Extra options for the underlying MCP server (e.g. a JSON schema validator). */
   mcp?: ConstructorParameters<typeof McpServer>[1];
 }
@@ -111,6 +135,7 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
     { instructions: SERVER_INSTRUCTIONS, ...opts.mcp },
   );
   const cfg = client.cfg;
+  const mediaFiles = mediaFilesSchema(client.media);
 
   /** Wrap a write tool so each call that did something is appended to the write log. */
   const logged =
@@ -435,12 +460,20 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
     {
       description:
         "Upload an image, GIF or video and return its media_id for create_post. Images <= 5 MB go in one request; " +
-        "GIFs, videos and larger files use chunked upload and wait for processing. Optional alt text.",
+        "GIFs, videos and larger files are sent in 4 MB chunks. If X is still processing a video when this returns, " +
+        "the result says so: call get_media_status until it succeeds before posting. Optional alt text. " +
+        `Give one source: ${offeredSources(client.media).join(", ")}.`,
       inputSchema: {
         account,
-        file_path: z.string().optional().describe("Absolute path to a local file (jpg/png/webp/gif/mp4/mov)"),
-        base64: z.string().optional().describe("Base64 data (or data: URL) instead of file_path"),
-        mime_type: z.string().optional().describe("Required for base64 without a data: prefix"),
+        ...mediaSourceFields(client.media),
+        base64: z
+          .string()
+          .optional()
+          .describe(
+            "Base64 data (or a data: URL)" +
+              (client.media.base64MaxBytes ? `, at most ${Math.floor(client.media.base64MaxBytes / 1048576)} MB decoded` : ""),
+          ),
+        mime_type: z.string().optional().describe("Required for base64 without a data: prefix when the type can't be guessed"),
         media_category: z
           .enum(["tweet_image", "tweet_gif", "tweet_video", "dm_image", "dm_gif", "dm_video", "subtitles"])
           .optional()
@@ -451,6 +484,29 @@ export function createServer(client: XClient, opts: ServerOptions = {}): McpServ
     },
     run((a) => uploadMedia(client, a)),
   );
+
+  if (opts.uploads && cfg.toolGroups.has("write")) {
+    const uploads = opts.uploads;
+    server.registerTool("create_upload_link",
+      {
+        description:
+          "Make a one-time link where the user can upload an image or video from their own device into this server's storage " +
+          "(the link expires in 15 minutes and works once). Give the link to the user; after they upload, call list_uploads " +
+          "and attach the file with media_files [{ r2_key }] or upload_media r2_key. Free; posts nothing.",
+        inputSchema: {},
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      },
+      run(() => uploads.createLink()),
+    );
+    server.registerTool("list_uploads",
+      {
+        description: "List files uploaded through create_upload_link, newest first, with the r2_key to attach them. Free.",
+        inputSchema: { limit: z.number().int().min(1).max(100).optional().describe("How many (default 10)") },
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      run(({ limit }) => uploads.list(limit ?? 10)),
+    );
+  }
 
   register("write", "get_media_status",
     {

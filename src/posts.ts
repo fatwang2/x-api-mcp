@@ -1,11 +1,8 @@
 import { XClient } from "./client.js";
-import { uploadMedia } from "./media.js";
+import { MediaRef, uploadReady } from "./media.js";
 import { POST_QUERY, shapePosts } from "./shape.js";
 
-export interface MediaFile {
-  file_path: string;
-  alt_text?: string;
-}
+export type MediaFile = MediaRef;
 
 export interface PostInput {
   account?: string;
@@ -33,8 +30,7 @@ export async function createPost(client: XClient, input: PostInput): Promise<Pos
   const account = await client.getAccount(key);
   const mediaIds = [...(input.media_ids ?? []).map(String)];
   for (const f of input.media_files ?? []) {
-    const m = await uploadMedia(client, { account: key, file_path: f.file_path, alt_text: f.alt_text });
-    mediaIds.push(m.media_id);
+    mediaIds.push(await uploadReady(client, { ...pickMedia(f), account: key }));
   }
   if (mediaIds.length > 4) throw new Error("A post can carry at most 4 media items.");
   if (!input.text && !mediaIds.length) throw new Error("text or media is required.");
@@ -142,4 +138,9 @@ export async function searchRecent(client: XClient, input: SearchInput) {
     },
   });
   return shapePosts(j);
+}
+
+/** Keep only the media fields of a media_files item, so nothing else rides along into the upload. */
+export function pickMedia(f: MediaRef): MediaRef {
+  return { file_path: f.file_path, r2_key: f.r2_key, media_url: f.media_url, alt_text: f.alt_text };
 }
