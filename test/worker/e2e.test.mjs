@@ -105,7 +105,7 @@ before(async () => {
     process.execPath,
     [
       path.resolve("node_modules/wrangler/bin/wrangler.js"),
-      "dev", "-c", "wrangler.example.toml", "--ip", "127.0.0.1", "--port", String(port),
+      "dev", "-c", "wrangler.jsonc", "--ip", "127.0.0.1", "--port", String(port),
       "--persist-to", persist, "--show-interactive-dev-session=false",
       ...Object.entries(vars).flatMap(([k, v]) => ["--var", `${k}:${v}`]),
     ],
@@ -294,7 +294,9 @@ test("an X account that is not on the allowlist is turned away and nothing is st
   const clientId = await registerClient();
   const { cb } = await signIn(clientId, "mallory", { verifier: b64url(crypto.randomBytes(32)) });
   assert.equal(cb.status, 403);
-  assert.match(await cb.text(), /not on this server&#39;s allowlist/);
+  const refusal = await cb.text();
+  assert.match(refusal, /not on this server&#39;s allowlist/);
+  assert.match(refusal, new RegExp(`X user ID ${USERS.mallory}`), "the page shows the ID to add");
   assert.ok(revoked.some((t) => issued.get(t) === "mallory"), "mallory's token was revoked");
   const accounts = toolJson(await mcp(accessToken, "tools/call", { name: "list_accounts", arguments: {} }));
   assert.deepEqual(accounts.accounts.map((a) => a.username), ["alice"]);

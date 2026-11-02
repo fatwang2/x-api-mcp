@@ -143,7 +143,10 @@ async function finishXSignIn(request: Request, env: Env): Promise<Response> {
       // Revocation is best effort; the tokens are not stored anywhere.
     }
     return htmlResponse(
-      messagePage("Not allowed", `@${account.username} is not on this server's allowlist, so it can't connect.`),
+      messagePage(
+        "Not allowed",
+        `@${account.username} is not on this server's allowlist, so it can't connect. To allow it, add its X user ID ${account.user_id} to ALLOWED_X_USER_IDS.`,
+      ),
       403,
       headers,
     );

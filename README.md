@@ -4,6 +4,8 @@ A **local stdio MCP server** for the official X API v2, built around multi-accou
 
 It runs on your own computer, started by your AI client as a child process. OAuth tokens stay in `~/.x-api-mcp/tokens.json` (mode 0600) and never pass through a third-party server.
 
+For claude.ai on the web and phone, which can't start local processes, the same tools also run as a [**self-hosted remote server**](#remote-server-self-hosted) on your own Cloudflare account.
+
 ## Why x-api-mcp
 
 X offers two MCP servers of its own (see [X's MCP docs](https://docs.x.com/tools/mcp)). Neither is built for posting from several accounts day to day:
@@ -17,7 +19,8 @@ X offers two MCP servers of its own (see [X's MCP docs](https://docs.x.com/tools
 | Stays signed in | Yes, tokens saved and refreshed | Via `xurl` | No, re-authorize on every restart |
 | Install | One plugin or `npx` line | `xurl mcp` bridge | Python, `.env` file, run a local web server |
 | Tool count | 26, grouped by action | Curated set | About 120, generated from the API spec |
-| Safety rails | Agent skill (confirm before posting, name the account), optional `X_REQUIRE_ACCOUNT` and write-only mode | None beyond read-only access | Tool allowlist |
+| Web and phone chat | Yes, with your own [remote server](#remote-server-self-hosted) | Yes | Only if you host it yourself |
+| Safety rails | Agent skill and server instructions (confirm before posting, name the account), tool annotations, optional `X_REQUIRE_ACCOUNT` and write-only mode; the remote server also keeps a write log | None beyond read-only access | Tool allowlist |
 
 Use the hosted MCP when you only need to read and search X. Use x-api-mcp when an agent should post, reply, upload media or manage interactions for one or more accounts, with tokens kept on your computer. All three use your own X App and its pay-per-use credits.
 
@@ -50,8 +53,9 @@ Each user brings their own X App, and API usage is billed to that App's credits.
 | Cursor | [Cursor plugin](#cursor) or [MCP config](#any-other-mcp-client) | Plugin settings, or `X_CLIENT_ID` |
 | Grok Bot | [Ready-made bot template](#grok-bot) | `set_client_id` from chat |
 | Claude desktop chat, Windsurf, Cline and other MCP clients | [MCP config](#any-other-mcp-client) | `X_CLIENT_ID` in the config |
+| claude.ai on the web and phone, other remote MCP clients | [Self-hosted remote server](#remote-server-self-hosted) | A secret on your Worker |
 
-All plugin installs include the same MCP server plus a skill that tells the agent how to use it safely: confirm before acting, always name the account, mind the costs, and how to authorize. Everything runs locally, so plugins work only where the client runs on your computer (not in web or mobile chat).
+All plugin installs include the same MCP server plus a skill that tells the agent how to use it safely: confirm before acting, always name the account, mind the costs, and how to authorize. Everything runs locally, so plugins work only where the client runs on your computer. For web and mobile chat, deploy the [remote server](#remote-server-self-hosted).
 
 Wherever the Client ID isn't asked for at install time, either ask the agent to call `set_client_id` with it, or run `npx x-api-mcp config --client-id your-client-id` once in a terminal. It is saved in `~/.x-api-mcp/app.json`; an `X_CLIENT_ID` environment variable wins when both are set.
 
@@ -107,9 +111,78 @@ claude mcp add x -e X_CLIENT_ID=your-client-id -- npx -y x-api-mcp
 
 Requires Node.js 20 or later.
 
+## Remote server (self-hosted)
+
+The remote server is the same set of tools on a Cloudflare Worker, added to Claude as a custom connector. Use it when you want to post from claude.ai on the web or your phone. There is no shared instance: you deploy your own, on your own Cloudflare account, with your own X App, and only the X accounts you allow can sign in.
+
+| | Local server | Remote server |
+| --- | --- | --- |
+| Runs on | Your computer, started by the client | A Worker on your Cloudflare account (free plan is enough to start) |
+| Works in | Claude Code, desktop apps, Codex, Cursor and other local clients | claude.ai on the web, phone and desktop, and any client that supports remote MCP with OAuth |
+| X App | Native App (no secret) | A separate **Web App** with a Client Secret |
+| Tokens | `~/.x-api-mcp/tokens.json` | A Durable Object in your account |
+| Who can use it | Whoever runs it | X accounts on `ALLOWED_X_USER_IDS` sign in to the connector; they can add more accounts to act as |
+| Media | `file_path`, base64 | Public `media_url`, base64 up to 2 MB, and files uploaded on a one-time page into your R2 bucket |
+| Extra tools | `set_client_id`, `complete_authorization` | `get_write_log`, `create_upload_link`, `list_uploads` |
+
+### 1. Create an X Web App
+
+Use a separate App from the one your local server uses, so each can be revoked on its own.
+
+1. At [console.x.com](https://console.x.com), create an App and add pay-per-use credits.
+2. Under **User authentication settings**: App permissions **Read and write** (plus **Direct Messages** if you want DM tools), Type of App **Web App**, Callback URI `https://<your-worker-host>/x/callback`.
+3. Copy the OAuth 2.0 **Client ID** and **Client Secret**.
+
+`<your-worker-host>` is either `x-api-mcp.<your-subdomain>.workers.dev` or your own domain. You can create the App first with your best guess and fix the Callback URI after deploying.
+
+### 2. Deploy
+
+**With the button:** it copies this repository into your GitHub account, creates the KV namespace, Durable Object and R2 bucket, and asks for the four secrets below.
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/fatwang2/x-api-mcp)
+
+**By hand** (Node.js 20 or later):
+
+```bash
+git clone https://github.com/fatwang2/x-api-mcp && cd x-api-mcp
+npm install
+npx wrangler login
+cp .dev.vars.example .dev.vars           # fill in the four secrets (git ignores this file)
+npx wrangler deploy --secrets-file .dev.vars
+npx wrangler r2 bucket lifecycle add x-api-mcp-media expire-uploads uploads/ --expire-days 7
+```
+
+The first deploy creates the KV namespace and the R2 bucket. You can delete `.dev.vars` afterwards; the secrets live on the Worker, and `npx wrangler secret put <NAME>` changes one later.
+
+The secrets:
+
+| Secret | Value |
+| --- | --- |
+| `X_PUBLIC_BASE_URL` | `https://<your-worker-host>`, with no path |
+| `X_CLIENT_ID`, `X_CLIENT_SECRET` | From the X Web App |
+| `ALLOWED_X_USER_IDS` | Numeric X user IDs allowed to sign in, comma separated. Empty allows nobody. If you don't know yours, sign in once: the refusal page shows it |
+
+**Your own domain:** keep it out of the repository. Copy `wrangler.jsonc` to `wrangler.local.jsonc` (git ignores it), add `"routes": [{ "pattern": "x-api-mcp.example.com", "custom_domain": true }]` with your domain, and deploy with `npx wrangler deploy -c wrangler.local.jsonc`. Then set `X_PUBLIC_BASE_URL` and the X Callback URI to that domain.
+
+Settings in `wrangler.jsonc`: `X_TOOLS` (`all` or `read`), `X_REQUIRE_ACCOUNT` (on; write tools must name their account), `X_MEDIA_WAIT_SECONDS` (how long an upload waits for X to process a video, default 20). `X_ENABLE_DM`, `X_SCOPES` and `X_DEFAULT_ACCOUNT` work as on the local server.
+
+### 3. Add the connector to Claude
+
+In claude.ai, open **Settings → Connectors → Add custom connector**, enter `https://<your-worker-host>/mcp`, and connect. You approve the connection on your server's page, then sign in with an allowed X account. That account is saved as the first one.
+
+Set the write tools (`create_post`, `create_thread`, `delete_post`, `post_action`, `user_action`, `list_action`, `send_dm`) to ask for approval every time in the connector's tool settings. The server also tells Claude to confirm each visible action, and every write is recorded; ask Claude for `get_write_log` to see what was done.
+
+Before relying on it, try it with a test account: post once, check `get_write_log`, then delete the post.
+
+### Using it
+
+- **More X accounts:** ask Claude to `add_account`. It gives you an X sign-in link; open it in a browser signed in to that account and approve. Accounts added this way don't need to be on the allowlist, since only a signed-in owner can start one.
+- **Images and video:** give Claude a public https link (`media_url`), or ask for an upload link: `create_upload_link` returns a page that takes one file from your phone or computer within 15 minutes, and Claude attaches it by its `r2_key`. Videos up to 100 MB go through that page (Cloudflare's request size limit on Free and Pro plans). If X is still processing a video, Claude checks `get_media_status` and posts once it's ready.
+- **Updating:** pull the latest code and deploy again (with the button, push to the copied repository).
+
 ## Add X accounts
 
-Call `add_account` from chat (or run `npx x-api-mcp login` in a terminal) and open the returned URL. Repeat to add more accounts. How the callback comes back depends on where the browser is:
+On the local server, call `add_account` from chat (or run `npx x-api-mcp login` in a terminal) and open the returned URL. (On the remote server, see [Using it](#using-it).) Repeat to add more accounts. How the callback comes back depends on where the browser is:
 
 - **Loopback** (browser on the same computer as the server): a listener on `127.0.0.1:8765` saves the token automatically.
 - **Paste** (browser on another device, as with chat bots, remote agents or SSH): after approving, the browser lands on an error page at `http://127.0.0.1:8765/callback?...`. Copy that full URL and paste it back right away; the agent passes it to `complete_authorization`. X codes expire about 30 seconds after approval.
@@ -145,6 +218,8 @@ Endpoints are grouped by action rather than one tool per endpoint, so agents can
 Almost every call is billed per use; see the [pricing page](https://docs.x.com/x-api/getting-started/pricing) and your console for current rates. Posts containing a URL cost noticeably more. X documents `quote_post_id` and blocking as Enterprise-only.
 
 By default authorization requests every scope these tools use except DM scopes, because an App without Direct Messages permission rejects the whole request when they are asked for. If an account was authorized with fewer scopes, calls that need a missing scope fail before reaching X with a hint to run `add_account` again.
+
+The remote server leaves out `set_client_id` and `complete_authorization`, has no `file_path` media source, and adds `get_write_log`, `create_upload_link` and `list_uploads`.
 
 Not covered: Spaces, bookmark folders, DM deletion, streaming endpoints, Ads and compliance endpoints.
 
@@ -185,6 +260,7 @@ x-api-mcp runs entirely on your computer. It has no server of its own and the au
 - **What it stores:** your X App's Client ID (and secret, if you use one) in `~/.x-api-mcp/app.json`, and OAuth access and refresh tokens plus basic account details (username, user ID, display name, granted scopes) in `~/.x-api-mcp/tokens.json`. Both files are readable only by your user account (mode 0600). Nothing else is stored.
 - **Where data goes:** requests go directly from your computer to the X API (`api.x.com`) and X's OAuth pages, using your own App. Post text, media files, DMs and other content you ask the agent to send are transmitted only to X. No analytics or telemetry are collected.
 - **Third parties:** your use of the X API is governed by the [X Developer Agreement and Policy](https://developer.x.com/en/developer-terms) and [X's Privacy Policy](https://x.com/en/privacy). Content returned by the tools is passed to the AI agent you run them in, under that agent provider's terms.
+- **Remote server:** if you deploy it, the same data lives in your own Cloudflare account instead: X tokens and account details in a Durable Object, a log of writes (last 1000), and the connector's OAuth grants in KV. Files uploaded through `create_upload_link` are kept in your R2 bucket until your lifecycle rule removes them. Nothing goes to the author of this project.
 - **Removal:** `remove_account` (or `x-api-mcp logout <username>`) revokes an account's tokens at X and deletes them locally. Deleting `~/.x-api-mcp` removes everything.
 - **Contact:** open an issue at https://github.com/fatwang2/x-api-mcp/issues.
 
@@ -200,9 +276,11 @@ npm test   # builds, then runs end-to-end tests against a local mock of the X AP
 
 To try a local build in a client, point its MCP config at `node /absolute/path/to/x-api-mcp/dist/index.js` instead of `npx -y x-api-mcp`.
 
+`npm run test:worker` runs the remote server locally with `wrangler dev` against the same kind of mock (no Cloudflare account needed); `npm run worker:typecheck` and `npm run worker:build` check and bundle it without deploying.
+
 The tests cover OAuth (loopback and paste), refresh-token rotation, the concurrency lock, threads, chunked upload, interactions, DMs, tool-group switches and the stdio protocol.
 
-Layout: `src/oauth.ts` (PKCE and token endpoint), `src/auth.ts` (authorization flow and loopback callback), `src/store.ts` (token file and lock), `src/client.ts` (API client with auto refresh and scope checks), `src/posts.ts` (posting), `src/social.ts` (interactions, relationships, timelines, DMs, Lists), `src/shape.ts` (response trimming), `src/media.ts`, `src/server.ts` (MCP tool registration), `src/index.ts` (entry point and CLI).
+Layout: `src/oauth.ts` (PKCE and token endpoint), `src/auth.ts` (authorization flow and loopback callback), `src/store.ts` (token file and lock), `src/client.ts` (API client with auto refresh and scope checks), `src/posts.ts` (posting), `src/social.ts` (interactions, relationships, timelines, DMs, Lists), `src/shape.ts` (response trimming), `src/media.ts`, `src/server.ts` (MCP tool registration), `src/index.ts` (entry point and CLI). The remote server lives in `worker/` (see [`worker/README.md`](worker/README.md)) and reuses everything in `src/` except the file store and the local auth flow.
 
 ### Plugin files
 

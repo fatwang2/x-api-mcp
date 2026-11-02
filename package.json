@@ -20,8 +20,8 @@
     "test": "npm run build && node --test --test-timeout=30000 test/*.test.mjs",
     "test:worker": "node --test --test-timeout=120000 test/worker/*.test.mjs",
     "worker:typecheck": "tsc -p tsconfig.worker.json",
-    "worker:build": "wrangler deploy --dry-run -c wrangler.example.toml --outdir .wrangler/dry-run",
-    "worker:dev": "wrangler dev -c wrangler.toml",
+    "worker:build": "wrangler deploy --dry-run -c wrangler.jsonc --outdir .wrangler/dry-run",
+    "worker:dev": "wrangler dev",
     "start": "node dist/index.js",
     "prepublishOnly": "npm test",
     "version": "node scripts/sync-version.mjs && git add src/version.ts plugin.json .claude-plugin/plugin.json mcp.json .mcp.json"
@@ -55,5 +55,21 @@
   "bugs": {
     "url": "https://github.com/fatwang2/x-api-mcp/issues"
   },
-  "author": "fatwang2"
+  "author": "fatwang2",
+  "cloudflare": {
+    "bindings": {
+      "X_PUBLIC_BASE_URL": {
+        "description": "Public origin of this Worker, e.g. `https://x-api-mcp.<your-subdomain>.workers.dev` or your own domain. X calls back to `<origin>/x/callback`, and the connector URL is `<origin>/mcp`."
+      },
+      "X_CLIENT_ID": {
+        "description": "OAuth 2.0 Client ID of a dedicated X Web App (console.x.com, User authentication settings, type Web App)."
+      },
+      "X_CLIENT_SECRET": {
+        "description": "The Client Secret of that X Web App."
+      },
+      "ALLOWED_X_USER_IDS": {
+        "description": "Numeric X user IDs allowed to sign in, comma separated. Empty allows nobody. A refused sign-in page shows the ID to add."
+      }
+    }
+  }
 }

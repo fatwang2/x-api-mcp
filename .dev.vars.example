@@ -1,0 +1,7 @@
+# Secrets for the remote server. The Deploy to Cloudflare button asks for these; for a manual
+# deploy set each with `npx wrangler secret put <NAME>`. For `wrangler dev`, copy this file to
+# .dev.vars (ignored by git) and fill it in.
+X_PUBLIC_BASE_URL=https://x-api-mcp.example.com
+X_CLIENT_ID=
+X_CLIENT_SECRET=
+ALLOWED_X_USER_IDS=
