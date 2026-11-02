@@ -19,4 +19,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - run: npm run worker:typecheck
+      - run: npm run worker:build
+      - run: npm run test:worker
+        env:
+          WRANGLER_SEND_METRICS: "false"
       - run: node scripts/sync-version.mjs --check

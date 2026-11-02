@@ -1,8 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { AuthManager } from "./auth.js";
+import { removeAccount } from "./accounts.js";
+import type { AuthManager } from "./auth.js";
 import { XClient } from "./client.js";
-import { saveClientId } from "./config.js";
 import { mediaStatus, uploadMedia } from "./media.js";
 import { createPost, createThread, deletePost, getMe, searchRecent } from "./posts.js";
 import {
@@ -53,8 +53,22 @@ const run =
 
 type Group = "account" | "read" | "write" | "dm-read" | "dm-write";
 
-export function createServer(client: XClient, auth: AuthManager): McpServer {
-  const server = new McpServer({ name: "x-api-mcp", version: VERSION });
+export interface ServerOptions {
+  /**
+   * Account setup that only works on the user's own machine: the local OAuth flow (add_account,
+   * auth_status, complete_authorization) and saving the X App's Client ID (set_client_id). The
+   * remote Worker leaves this out and adds accounts through its own sign-in.
+   */
+  local?: {
+    auth: AuthManager;
+    saveClientId(clientId: string, clientSecret?: string): void;
+  };
+  /** Extra options for the underlying MCP server (instructions, JSON schema validator). */
+  mcp?: ConstructorParameters<typeof McpServer>[1];
+}
+
+export function createServer(client: XClient, opts: ServerOptions = {}): McpServer {
+  const server = new McpServer({ name: "x-api-mcp", version: VERSION }, opts.mcp);
   const cfg = client.cfg;
 
   /**
@@ -80,7 +94,7 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
 
   register("account", "list_accounts",
     {
-      description: "List X accounts authorized on this machine and which one is the default. Local only, no API cost.",
+      description: "List the authorized X accounts and which one is the default. No API cost.",
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     run(async () => {
@@ -101,80 +115,85 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
     }),
   );
 
-  register(
-    "account",
-    "set_client_id",
-    {
-      description:
-        "Save the OAuth 2.0 Client ID of the user's own X App (from console.x.com) on this machine, for hosts that " +
-        "cannot pass the X_CLIENT_ID environment variable. Needed once before add_account. No API call.",
-      inputSchema: {
-        client_id: z.string().min(1),
-        client_secret: z.string().optional().describe("Only for Web App (confidential) clients; Native Apps have none"),
-      },
-      annotations: { openWorldHint: false, idempotentHint: true },
-    },
-    run(async ({ client_id, client_secret }: { client_id: string; client_secret?: string }) => {
-      saveClientId(cfg, client_id, client_secret);
-      return {
-        saved: true,
-        active: cfg.clientId === client_id.trim(),
-        ...(cfg.clientIdSource === "env" ? { note: "X_CLIENT_ID is set in the environment and takes precedence over the saved value." } : {}),
-        next: "Call add_account to authorize an X account.",
-      };
-    }),
-  );
+  const local = opts.local;
+  if (local) {
+    const auth = local.auth;
 
-  register("account", "add_account",
-    {
-      description:
-        "Start OAuth 2.0 (PKCE) to authorize another X account. Returns authorize_url for the user to open in a browser " +
-        "logged in to that account, and a note to relay to them. mode=loopback: a local listener saves the token " +
-        "automatically; confirm with auth_status. mode=paste: ask the user to paste the callback URL from the address " +
-        "bar right after approving and pass it to complete_authorization at once. Tokens are stored only on this machine.",
-      inputSchema: {
-        wait_seconds: z
-          .number()
-          .int()
-          .min(0)
-          .max(300)
-          .optional()
-          .describe("Block up to this many seconds for the user to finish in the browser (default 0: return the URL immediately)."),
+    register(
+      "account",
+      "set_client_id",
+      {
+        description:
+          "Save the OAuth 2.0 Client ID of the user's own X App (from console.x.com) on this machine, for hosts that " +
+          "cannot pass the X_CLIENT_ID environment variable. Needed once before add_account. No API call.",
+        inputSchema: {
+          client_id: z.string().min(1),
+          client_secret: z.string().optional().describe("Only for Web App (confidential) clients; Native Apps have none"),
+        },
+        annotations: { openWorldHint: false, idempotentHint: true },
       },
-      annotations: { openWorldHint: true },
-    },
-    run(async ({ wait_seconds }) => {
-      const r = await auth.start();
-      if (wait_seconds && r.listening) {
-        const s = await auth.wait(r.state, wait_seconds * 1000);
-        return { ...r, result: s };
-      }
-      return r;
-    }),
-  );
+      run(async ({ client_id, client_secret }: { client_id: string; client_secret?: string }) => {
+        local.saveClientId(client_id, client_secret);
+        return {
+          saved: true,
+          active: cfg.clientId === client_id.trim(),
+          ...(cfg.clientIdSource === "env" ? { note: "X_CLIENT_ID is set in the environment and takes precedence over the saved value." } : {}),
+          next: "Call add_account to authorize an X account.",
+        };
+      }),
+    );
 
-  register("account", "auth_status",
-    {
-      description: "Check whether an authorization started with add_account has finished. Optionally wait for it.",
-      inputSchema: {
-        state: z.string().describe("state returned by add_account"),
-        wait_seconds: z.number().int().min(0).max(300).optional(),
+    register("account", "add_account",
+      {
+        description:
+          "Start OAuth 2.0 (PKCE) to authorize another X account. Returns authorize_url for the user to open in a browser " +
+          "logged in to that account, and a note to relay to them. mode=loopback: a local listener saves the token " +
+          "automatically; confirm with auth_status. mode=paste: ask the user to paste the callback URL from the address " +
+          "bar right after approving and pass it to complete_authorization at once. Tokens are stored only on this machine.",
+        inputSchema: {
+          wait_seconds: z
+            .number()
+            .int()
+            .min(0)
+            .max(300)
+            .optional()
+            .describe("Block up to this many seconds for the user to finish in the browser (default 0: return the URL immediately)."),
+        },
+        annotations: { openWorldHint: true },
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
-    },
-    run(async ({ state, wait_seconds }) => (wait_seconds ? auth.wait(state, wait_seconds * 1000) : auth.status(state))),
-  );
+      run(async ({ wait_seconds }) => {
+        const r = await auth.start();
+        if (wait_seconds && r.listening) {
+          const s = await auth.wait(r.state, wait_seconds * 1000);
+          return { ...r, result: s };
+        }
+        return r;
+      }),
+    );
 
-  register("account", "complete_authorization",
-    {
-      description:
-        "Fallback when the automatic callback listener is unavailable: finish add_account with the full callback URL " +
-        "from the browser address bar (contains code and state). X codes expire ~30 seconds after approval.",
-      inputSchema: { redirect_url: z.string().describe("Full callback URL, e.g. http://127.0.0.1:8765/callback?state=...&code=...") },
-      annotations: { openWorldHint: true },
-    },
-    run(({ redirect_url }) => auth.complete({ redirect_url })),
-  );
+    register("account", "auth_status",
+      {
+        description: "Check whether an authorization started with add_account has finished. Optionally wait for it.",
+        inputSchema: {
+          state: z.string().describe("state returned by add_account"),
+          wait_seconds: z.number().int().min(0).max(300).optional(),
+        },
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      run(async ({ state, wait_seconds }) => (wait_seconds ? auth.wait(state, wait_seconds * 1000) : auth.status(state))),
+    );
+
+    register("account", "complete_authorization",
+      {
+        description:
+          "Fallback when the automatic callback listener is unavailable: finish add_account with the full callback URL " +
+          "from the browser address bar (contains code and state). X codes expire ~30 seconds after approval.",
+        inputSchema: { redirect_url: z.string().describe("Full callback URL, e.g. http://127.0.0.1:8765/callback?state=...&code=...") },
+        annotations: { openWorldHint: true },
+      },
+      run(({ redirect_url }) => auth.complete({ redirect_url })),
+    );
+  }
 
   register("account", "set_default_account",
     {
@@ -195,14 +214,14 @@ export function createServer(client: XClient, auth: AuthManager): McpServer {
 
   register("account", "remove_account",
     {
-      description: "Forget an authorized account on this machine and revoke its tokens at X.",
+      description: "Forget an authorized account and revoke its tokens at X.",
       inputSchema: {
         account: z.string(),
         revoke: z.boolean().optional().describe("Also revoke the tokens at X (default true)"),
       },
       annotations: { destructiveHint: true, openWorldHint: true },
     },
-    run(({ account, revoke }) => auth.remove(account, revoke ?? true)),
+    run(({ account, revoke }) => removeAccount(client, account, revoke ?? true)),
   );
 
   register("read", "get_me",

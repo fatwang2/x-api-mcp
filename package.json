@@ -18,6 +18,10 @@
     "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
     "dev": "tsc -p tsconfig.json --watch",
     "test": "npm run build && node --test --test-timeout=30000 test/*.test.mjs",
+    "test:worker": "node --test --test-timeout=120000 test/worker/*.test.mjs",
+    "worker:typecheck": "tsc -p tsconfig.worker.json",
+    "worker:build": "wrangler deploy --dry-run -c wrangler.example.toml --outdir .wrangler/dry-run",
+    "worker:dev": "wrangler dev -c wrangler.toml",
     "start": "node dist/index.js",
     "prepublishOnly": "npm test",
     "version": "node scripts/sync-version.mjs && git add src/version.ts plugin.json .claude-plugin/plugin.json mcp.json .mcp.json"
@@ -36,8 +40,12 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@cfworker/json-schema": "4.1.1",
+    "@cloudflare/workers-oauth-provider": "1.2.3",
+    "@cloudflare/workers-types": "5.20261018.1",
     "@types/node": "^22.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wrangler": "4.151.1"
   },
   "repository": {
     "type": "git",

@@ -1,0 +1,34 @@
+# Example Wrangler config for the remote x-api-mcp server (Cloudflare Workers).
+# Copy to wrangler.toml (ignored by git), fill in your own values, then deploy with
+# `npx wrangler deploy`. Nothing that identifies your deployment belongs in this repository.
+name = "x-api-mcp"
+main = "worker/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Serve the Worker on your own domain:
+# routes = [{ pattern = "x-api-mcp.example.com", custom_domain = true }]
+
+[vars]
+# Public origin of the Worker. X calls back to <origin>/x/callback, and the connector URL is <origin>/mcp.
+X_PUBLIC_BASE_URL = "https://x-api-mcp.example.com"
+# Start with read-only tools. Write tools come with the guardrails in a later release.
+X_TOOLS = "read"
+X_REQUIRE_ACCOUNT = "1"
+
+# Secrets, set with `npx wrangler secret put <NAME>`, never written here:
+#   X_CLIENT_ID          OAuth 2.0 Client ID of a dedicated X Web App
+#   X_CLIENT_SECRET      its Client Secret
+#   ALLOWED_X_USER_IDS   numeric X user IDs allowed to sign in, comma separated (empty allows nobody)
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "00000000000000000000000000000000" # replace with `npx wrangler kv namespace create OAUTH_KV`
+
+[[durable_objects.bindings]]
+name = "X_TOKEN_STORE"
+class_name = "XTokenStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["XTokenStore"]

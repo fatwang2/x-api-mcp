@@ -33,7 +33,9 @@ async function main(argv: string[]) {
   switch (cmd) {
     case undefined:
     case "serve": {
-      const server = createServer(client, auth);
+      const server = createServer(client, {
+        local: { auth, saveClientId: (id, secret) => saveClientId(cfg, id, secret) },
+      });
       await server.connect(new StdioServerTransport());
       return;
     }

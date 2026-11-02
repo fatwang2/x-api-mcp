@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { Config } from "./config.js";
+import type { Config } from "./config-core.js";
 import { XApiError, describeError, parseBody } from "./errors.js";
 
 export interface TokenResponse {
